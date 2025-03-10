@@ -21,7 +21,8 @@ export default defineConfig({
             { text: 'Installation', link: '/installation' },
             { text: 'Regular Usage', link: '/regular_usage' },
             { text: 'Security', link: '/security' },
-            { text: 'Troubleshooting', link: '/troubleshooting' }
+            { text: 'Troubleshooting', link: '/troubleshooting' },
+            { text: 'Apis', link: '/apis' }
           ]
         }
       ],
@@ -35,7 +36,8 @@ export default defineConfig({
           { text: 'Installation', link: '/installation' },
           { text: 'Regular Usage', link: '/regular_usage' },
           { text: 'Security', link: '/security' },
-          { text: 'Troubleshooting', link: '/troubleshooting' }
+          { text: 'Troubleshooting', link: '/troubleshooting' },
+          { text: 'Apis', link: '/apis' }
         ]
       }
     ],

@@ -21,10 +21,12 @@ import (
 	"github.com/goliac-project/goliac/internal/entity"
 	"github.com/goliac-project/goliac/internal/observability"
 	"github.com/goliac-project/goliac/internal/utils"
+	"github.com/google/go-github/v55/github"
 	"github.com/gosimple/slug"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/oauth2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -53,7 +55,7 @@ type GoliacLocalGit interface {
 	LoadAndValidate(errorCollection *observability.ErrorCollection)
 	// whenever someone create/delete a team, we must update the github CODEOWNERS
 	UpdateAndCommitCodeOwners(ctx context.Context, repoconfig *config.RepositoryConfig, dryrun bool, accesstoken string, branch string, tagname string, githubOrganization string) error
-	// whenever repos are not deleted but archived, or need to be renamed
+	// whenever repos are not deleted but archived [reponame], need to be renamed [directorypath:repo definition], or created [directorypath: repo definition]
 	UpdateRepos(reposToArchiveList []string, reposToRename map[string]*entity.Repository, accesstoken string, branch string, tagname string) error
 	// whenever the users list is changing, reload users and teams, and commit them
 	// (force will bypass the max_changesets check)
@@ -63,6 +65,9 @@ type GoliacLocalGit interface {
 
 	// Load and Validate from a local directory
 	LoadAndValidateLocal(fs billy.Filesystem, errorCollection *observability.ErrorCollection)
+
+	UpdateReposViaPullRequest(reposToCreate map[string]*entity.Repository, orgname, reponame, accesstoken, baseBranch, newBranchName string) (*github.PullRequest, error)
+	MergePullRequest(pr *github.PullRequest, accesstoken, mainBranch string) error
 }
 
 type GoliacLocalResources interface {
@@ -482,6 +487,13 @@ func (g *GoliacLocalImpl) UpdateRepos(reposToArchiveList []string, reposToRename
 		}
 	}
 
+	// reloading the new local organization
+	errorCollection := observability.NewErrorCollection()
+	g.LoadAndValidateLocal(w.Filesystem, errorCollection)
+	if errorCollection.HasErrors() {
+		return fmt.Errorf("error reloading and validating the local organization: %v", errorCollection)
+	}
+
 	err = g.repo.Push(&git.PushOptions{
 		RemoteName: "origin",
 		Auth: &http.BasicAuth{
@@ -496,6 +508,133 @@ func (g *GoliacLocalImpl) UpdateRepos(reposToArchiveList []string, reposToRename
 
 	// push the tagname
 	return g.PushTag(tagname, headRef.Hash(), accesstoken)
+}
+
+func (g *GoliacLocalImpl) UpdateReposViaPullRequest(reposToCreate map[string]*entity.Repository, orgname, reponame, accesstoken, baseBranch, newBranchName string) (*github.PullRequest, error) {
+	if g.repo == nil {
+		return nil, fmt.Errorf("git repository not cloned")
+	}
+
+	// If not on main, check out the main branch
+	w, err := g.repo.Worktree()
+	if err != nil {
+		return nil, err
+	}
+
+	err = w.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(newBranchName),
+		Create: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(reposToCreate) != 0 {
+
+		for directoryPath, repository := range reposToCreate {
+			newRepository := *repository
+
+			filename := filepath.Join(directoryPath, newRepository.Name+".yaml")
+			file, err := w.Filesystem.Create(filename)
+			if err != nil {
+				return nil, fmt.Errorf("not able to create file %s: %v", filename, err)
+			}
+			defer file.Close()
+
+			encoder := yaml.NewEncoder(file)
+			encoder.SetIndent(2)
+			err = encoder.Encode(&newRepository)
+			if err != nil {
+				return nil, fmt.Errorf("not able to write to file %s: %v", filename, err)
+			}
+
+			_, err = w.Add(filename)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		_, err = w.Commit("creating repositories", &git.CommitOptions{
+			Author: &object.Signature{
+				Name:  "Goliac",
+				Email: config.Config.GoliacEmail,
+				When:  time.Now(),
+			},
+		})
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = g.repo.Push(&git.PushOptions{
+		RemoteName: "origin",
+		Auth: &http.BasicAuth{
+			Username: "x-access-token", // This can be anything except an empty string
+			Password: accesstoken,
+		},
+		RefSpecs: []goconfig.RefSpec{goconfig.RefSpec("refs/heads/" + newBranchName + ":refs/heads/" + newBranchName)},
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error pushing to remote: %v", err)
+	}
+
+	return createPullRequest(orgname, reponame, accesstoken, baseBranch, newBranchName, "Creating new repositories")
+}
+
+// Function to create a PR using GitHub API
+func createPullRequest(orgname, reponame, accesstoken, baseBranch, branch, title string) (*github.PullRequest, error) {
+
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accesstoken})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	newPR := &github.NewPullRequest{
+		Title: github.String(title),
+		Head:  github.String(branch),
+		Base:  github.String(baseBranch),
+		//		Body:                github.String(prBody),
+		MaintainerCanModify: github.Bool(true),
+	}
+
+	pr, _, err := client.PullRequests.Create(ctx, orgname, reponame, newPR)
+	if err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
+
+func (g *GoliacLocalImpl) MergePullRequest(pr *github.PullRequest, accesstoken, mainBranch string) error {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accesstoken})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	// Create review request
+	review := &github.PullRequestReviewRequest{
+		Body:  github.String("Approving this PR via GitHub App."),
+		Event: github.String("APPROVE"),
+	}
+
+	// Approve the PR
+	_, _, err := client.PullRequests.CreateReview(ctx, pr.GetBase().GetRepo().GetOwner().GetLogin(), pr.GetBase().GetRepo().GetName(), pr.GetNumber(), review)
+	if err != nil {
+		return fmt.Errorf("failed to approve PR: %v", err)
+	}
+
+	// Merge request options
+	mergeOpts := &github.PullRequestOptions{
+		MergeMethod: "squash", // Options: "merge", "squash", "rebase"
+	}
+
+	_, _, err = client.PullRequests.Merge(ctx, pr.GetBase().GetRepo().GetOwner().GetLogin(), pr.GetBase().GetRepo().GetName(), pr.GetNumber(), "Merging PR", mergeOpts)
+
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 /*

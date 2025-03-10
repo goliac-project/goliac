@@ -347,7 +347,7 @@ func (c *GitHubClientMock) QueryGraphQLAPI(ctx context.Context, query string, va
 	return nil, nil
 }
 
-func (c *GitHubClientMock) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}) ([]byte, error) {
+func (c *GitHubClientMock) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
 	if strings.HasSuffix(endpoint, "/invitations") {
 		return []byte(`[]`), nil
 	}
@@ -588,7 +588,7 @@ func (e *GoliacRemoteExecutorMock) DeleteTeam(ctx context.Context, errorCollecto
 	e.nbChanges++
 }
 
-func (e *GoliacRemoteExecutorMock) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string) {
+func (e *GoliacRemoteExecutorMock) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string, githubToken *string) {
 	fmt.Println("*** CreateRepository", reponame, descrition, visibility, writers, readers, boolProperties, defaultBranch)
 	e.nbChanges++
 }

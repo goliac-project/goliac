@@ -54,6 +54,8 @@ paths:
     $ref: ./statistics.yaml
   /unmanaged:
     $ref: ./unmanaged.yaml
+  /external/createrepository:
+    $ref: ./external_createrepository.yaml
 
 definitions:
 

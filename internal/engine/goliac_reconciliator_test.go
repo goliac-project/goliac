@@ -11,6 +11,7 @@ import (
 	"github.com/goliac-project/goliac/internal/config"
 	"github.com/goliac-project/goliac/internal/entity"
 	"github.com/goliac-project/goliac/internal/observability"
+	"github.com/google/go-github/v55/github"
 	"github.com/gosimple/slug"
 	"github.com/stretchr/testify/assert"
 )
@@ -66,6 +67,13 @@ func (m *GoliacLocalMock) UpdateAndCommitCodeOwners(ctx context.Context, repocon
 func (m *GoliacLocalMock) UpdateRepos(reposToArchiveList []string, reposToRename map[string]*entity.Repository, accesstoken string, branch string, tagname string) error {
 	return nil
 }
+func (m *GoliacLocalMock) UpdateReposViaPullRequest(reposToCreate map[string]*entity.Repository, orgname, reponame, accesstoken, baseBranch, newBranchName string) (*github.PullRequest, error) {
+	return nil, nil
+}
+func (m *GoliacLocalMock) MergePullRequest(pr *github.PullRequest, accesstoken, mainBranch string) error {
+	return nil
+}
+
 func (m *GoliacLocalMock) SyncUsersAndTeams(ctx context.Context, repoconfig *config.RepositoryConfig, plugin UserSyncPlugin, accesstoken string, dryrun bool, force bool, feedback observability.RemoteObservability, errorCollector *observability.ErrorCollection) bool {
 	return false
 }
@@ -218,7 +226,7 @@ func (r *ReconciliatorListenerRecorder) UpdateTeamSetParent(ctx context.Context,
 func (r *ReconciliatorListenerRecorder) DeleteTeam(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, teamslug string) {
 	r.TeamDeleted[teamslug] = true
 }
-func (r *ReconciliatorListenerRecorder) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string) {
+func (r *ReconciliatorListenerRecorder) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string, githubToken *string) {
 	r.RepositoryCreated[reponame] = true
 }
 func (r *ReconciliatorListenerRecorder) UpdateRepositoryAddTeamAccess(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, teamslug string, permission string) {

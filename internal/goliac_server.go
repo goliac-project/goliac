@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -51,6 +52,8 @@ type GoliacServer interface {
 	GetRepository(app.GetRepositoryParams) middleware.Responder
 	GetStatistics(app.GetStatiticsParams) middleware.Responder
 	GetUnmanaged(app.GetUnmanagedParams) middleware.Responder
+
+	PostExternalCreateRepository(app.PostExternalCreateRepositoryParams) middleware.Responder
 }
 
 type GoliacServerImpl struct {
@@ -62,6 +65,7 @@ type GoliacServerImpl struct {
 	ready               bool // when the server has finished to load the local configuration
 	lastSyncTime        *time.Time
 	lastSyncError       error
+	lastSyncWarnings    string // all the warnings that happened during the last sync (sorted)
 	detailedErrors      []error
 	detailedWarnings    []observability.Warning
 	syncInterval        int64 // in seconds time remaining between 2 sync
@@ -623,6 +627,40 @@ func (g *GoliacServerImpl) PostResync(params app.PostResyncParams) middleware.Re
 	return app.NewPostResyncOK()
 }
 
+func (g *GoliacServerImpl) PostExternalCreateRepository(params app.PostExternalCreateRepositoryParams) middleware.Responder {
+	if params.Body.Visibility == "" {
+		params.Body.Visibility = "private"
+	}
+	if params.Body.DefaultBranch == "" {
+		params.Body.DefaultBranch = "main"
+	}
+	if params.Body.Visibility != "private" && params.Body.Visibility != "public" && params.Body.Visibility != "internal" {
+		message := fmt.Sprintf("Invalid visibility: %s", params.Body.Visibility)
+		return app.NewPostExternalCreateRepositoryDefault(400).WithPayload(&models.Error{Message: &message})
+	}
+	errorCollector := observability.NewErrorCollection()
+
+	g.goliac.ExternalCreateRepository(
+		params.HTTPRequest.Context(),
+		errorCollector,
+		osfs.New("/"),
+		params.Body.GithubToken,
+		params.Body.RepositoryName,
+		params.Body.TeamName,
+		params.Body.Visibility,
+		params.Body.DefaultBranch,
+		config.Config.ServerGitRepository,
+		config.Config.ServerGitBranch,
+	)
+
+	if errorCollector.HasErrors() {
+		message := fmt.Sprintf("Error when creating repository: %s", errorCollector.Errors[0])
+		return app.NewPostExternalCreateRepositoryDefault(500).WithPayload(&models.Error{Message: &message})
+	}
+
+	return app.NewPostExternalCreateRepositoryOK()
+}
+
 func (g *GoliacServerImpl) Serve() {
 	var wg sync.WaitGroup
 	stopCh := make(chan struct{})
@@ -749,6 +787,25 @@ func (g *GoliacServerImpl) triggerApply(ctx context.Context) {
 		if errorCollector.HasErrors() {
 			g.lastSyncError = errorCollector.Errors[len(errorCollector.Errors)-1]
 		}
+
+		// we want to log the warnings only if they are new
+		previousSyncWarnings := g.lastSyncWarnings
+		g.lastSyncWarnings = ""
+		warns := []string{}
+		for _, w := range errorCollector.Warns {
+			warns = append(warns, w.Error())
+		}
+		sort.Strings(warns)
+		for _, w := range warns {
+			g.lastSyncWarnings += w + "\n"
+		}
+
+		if previousSyncWarnings != g.lastSyncWarnings {
+			for _, w := range errorCollector.Warns {
+				logrus.Warn(w)
+			}
+		}
+
 		g.detailedErrors = errorCollector.Errors
 		g.detailedWarnings = errorCollector.Warns
 		// log the error only if it's a new one
@@ -790,6 +847,8 @@ func (g *GoliacServerImpl) StartRESTApi() (*restapi.Server, error) {
 	api.AppGetTeamHandler = app.GetTeamHandlerFunc(g.GetTeam)
 	api.AppGetRepositoriesHandler = app.GetRepositoriesHandlerFunc(g.GetRepositories)
 	api.AppGetRepositoryHandler = app.GetRepositoryHandlerFunc(g.GetRepository)
+
+	api.AppPostExternalCreateRepositoryHandler = app.PostExternalCreateRepositoryHandlerFunc(g.PostExternalCreateRepository)
 
 	server := restapi.NewServer(api)
 

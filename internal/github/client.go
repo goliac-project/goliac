@@ -26,7 +26,7 @@ import (
 
 type GitHubClient interface {
 	QueryGraphQLAPI(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error)
-	CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}) ([]byte, error)
+	CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error)
 	GetAccessToken(ctx context.Context) (string, error)
 	GetAppSlug() string
 }
@@ -53,7 +53,7 @@ func (t *AuthorizedTransport) RoundTrip(req *http.Request) (*http.Response, erro
 
 	// Use the personal access token if available
 	if t.client.patToken != "" {
-		req.Header.Add("Authorization", "token "+t.client.patToken)
+		req.Header.Add("Authorization", "Bearer "+t.client.patToken)
 		t.client.mu.Unlock()
 		return http.DefaultTransport.RoundTrip(req)
 	}
@@ -324,7 +324,7 @@ func (client *GitHubClientImpl) QueryGraphQLAPI(ctx context.Context, query strin
  * }
  * responseBody, err := client.CallRestAPIWithBody("orgs/my-org/repos", "POST", body)
  */
-func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}) ([]byte, error) {
+func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
 	var childSpan trace.Span
 	if config.Config.OpenTelemetryEnabled {
 		// get back the tracer from the context
@@ -379,7 +379,15 @@ func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, param
 	req.Header.Set("Accept", "application/vnd.github+json")
 	//	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	resp, err := client.httpClient.Do(req)
+	var resp *http.Response
+
+	if githubToken != nil {
+		req.Header.Set("Authorization", "Bearer "+*githubToken)
+		resp, err = http.DefaultClient.Do(req)
+	} else {
+		resp, err = client.httpClient.Do(req)
+	}
+
 	if err != nil {
 		if childSpan != nil {
 			// read the full response body to get the error message
@@ -408,7 +416,7 @@ func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, param
 		}
 
 		// Retry the request.
-		return client.CallRestAPI(ctx, endpoint, parameters, method, body)
+		return client.CallRestAPI(ctx, endpoint, parameters, method, body, githubToken)
 	} else {
 		responseBody, err := io.ReadAll(resp.Body)
 		if err != nil {

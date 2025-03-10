@@ -105,7 +105,7 @@ func (s *Scaffold) generate(ctx context.Context, fs billy.Filesystem, adminteam 
 		return fmt.Errorf("error creaing the users directory: %v", err)
 	}
 
-	err = s.generateTeams(ctx, fs, "teams", usermap, adminteam, usersOnly)
+	err = s.generateTeams(ctx, fs, "teams", "archived", usermap, adminteam, usersOnly)
 	if err != nil {
 		return fmt.Errorf("error creating the teams directory: %v", err)
 	}
@@ -129,7 +129,7 @@ func (s *Scaffold) generate(ctx context.Context, fs billy.Filesystem, adminteam 
 	return nil
 }
 
-func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teamspath string, usermap map[string]string, adminteam string, usersOnly bool) error {
+func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teamspath string, archivepath string, usermap map[string]string, adminteam string, usersOnly bool) error {
 	teamsRepositories := s.remote.TeamRepositories(ctx)
 	teams := s.remote.Teams(ctx, false)
 	teamsSlugByName := s.remote.TeamSlugByName(ctx)
@@ -280,6 +280,10 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 					if rRepo.DefaultBranchName != "main" {
 						lRepo.Spec.DefaultBranchName = rRepo.DefaultBranchName
 					}
+					lRepo.Archived = rRepo.BoolProperties["archived"]
+					if lRepo.Archived {
+						lRepo.Spec.Writers = append(lRepo.Spec.Writers, teams[team].Name)
+					}
 
 					// scaffoldling repository rulesets
 					rRulesets := rRepo.RuleSets
@@ -358,8 +362,14 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 						break
 					}
 				}
-				if err := writeYamlFile(path.Join(teamspath, teamPath, r+".yaml"), &lRepo, fs); err != nil {
-					logrus.Errorf("not able to write repo file %s/%s.yaml: %v", team, r, err)
+				if lRepo.Archived {
+					if err := writeYamlFile(path.Join(archivepath, r+".yaml"), &lRepo, fs); err != nil {
+						logrus.Errorf("not able to write archived repo file %s/%s.yaml: %v", archivepath, r, err)
+					}
+				} else {
+					if err := writeYamlFile(path.Join(teamspath, teamPath, r+".yaml"), &lRepo, fs); err != nil {
+						logrus.Errorf("not able to write repo file %s/%s.yaml: %v", team, r, err)
+					}
 				}
 			}
 		}

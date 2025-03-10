@@ -100,6 +100,12 @@ func NewScaffoldGoliacRemoteMock() engine.GoliacRemote {
 	}
 	repos["repo2"] = &repo2
 
+	archivedRepo := engine.GithubRepository{
+		Name:           "archived_repo",
+		BoolProperties: map[string]bool{"archived": true},
+	}
+	repos["archived_repo"] = &archivedRepo
+
 	teamRepoRegular := make(map[string]*engine.GithubTeamRepo)
 	teamRepoRegular["repo1"] = &engine.GithubTeamRepo{
 		Name:       "repo1",
@@ -108,6 +114,10 @@ func NewScaffoldGoliacRemoteMock() engine.GoliacRemote {
 	teamRepoRegular["repo2"] = &engine.GithubTeamRepo{
 		Name:       "repo2",
 		Permission: "READ",
+	}
+	teamRepoRegular["archived_repo"] = &engine.GithubTeamRepo{
+		Name:       "archived_repo",
+		Permission: "WRITE",
 	}
 	teamsRepos["regular"] = teamRepoRegular
 
@@ -331,7 +341,7 @@ func TestScaffoldFull(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 4, len(users))
 
-		err = scaffold.generateTeams(ctx, fs, "/teams", users, "admin", false)
+		err = scaffold.generateTeams(ctx, fs, "/teams", "/archived", users, "admin", false)
 		assert.Nil(t, err)
 
 		found, err := utils.Exists(fs, "/teams/admin/team.yaml")
@@ -357,7 +367,7 @@ func TestScaffoldFull(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 3, len(users))
 
-		err = scaffold.generateTeams(ctx, fs, "/teams", users, "admin", false)
+		err = scaffold.generateTeams(ctx, fs, "/teams", "/archived", users, "admin", false)
 		assert.Nil(t, err)
 
 		found, err := utils.Exists(fs, "/teams/admin/team.yaml")
@@ -411,7 +421,7 @@ func TestScaffoldFull(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 4, len(users))
 
-		err = scaffold.generateTeams(ctx, fs, "/teams", users, "admin", false)
+		err = scaffold.generateTeams(ctx, fs, "/teams", "/archived", users, "admin", false)
 		assert.Nil(t, err)
 
 		found, err := utils.Exists(fs, "/teams/regular/team.yaml")
@@ -425,5 +435,31 @@ func TestScaffoldFull(t *testing.T) {
 		yaml.Unmarshal(teamContent, &teamDefinition)
 		assert.Equal(t, 2, len(teamDefinition.Spec.Owners))
 		assert.Equal(t, 2, len(teamDefinition.Spec.Members))
+	})
+
+	t.Run("happy path: test teams and archived repos", func(t *testing.T) {
+		fs := memfs.New()
+		// MockGithubClient doesn't support concurrent access
+
+		scaffold := &Scaffold{
+			remote:                     NewScaffoldGoliacRemoteMock(),
+			loadUsersFromGithubOrgSaml: NoLoadGithubSamlUsersMock,
+		}
+
+		ctx := context.TODO()
+		users, err := scaffold.generateUsers(ctx, fs, "/users")
+		assert.Nil(t, err)
+		assert.Equal(t, 4, len(users))
+
+		err = scaffold.generateTeams(ctx, fs, "/teams", "/archived", users, "admin", false)
+		assert.Nil(t, err)
+
+		found, err := utils.Exists(fs, "/teams/admin/team.yaml")
+		assert.Nil(t, err)
+		assert.Equal(t, true, found)
+
+		found, err = utils.Exists(fs, "/archived/archived_repo.yaml")
+		assert.Nil(t, err)
+		assert.Equal(t, true, found)
 	})
 }

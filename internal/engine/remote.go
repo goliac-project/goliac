@@ -105,6 +105,7 @@ type GoliacRemoteImpl struct {
 	isEnterprise          bool
 	feedback              observability.RemoteObservability
 	loadTeamsMutex        sync.Mutex
+	actionMutex           sync.Mutex
 }
 
 type GHESInfo struct {
@@ -112,7 +113,7 @@ type GHESInfo struct {
 }
 
 func getGHESVersion(ctx context.Context, client github.GitHubClient) (*GHESInfo, error) {
-	body, err := client.CallRestAPI(ctx, "/api/v3", "", "GET", nil)
+	body, err := client.CallRestAPI(ctx, "/api/v3", "", "GET", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +213,7 @@ type OrgInfo struct {
 }
 
 func getOrgInfo(ctx context.Context, orgname string, client github.GitHubClient) (*OrgInfo, error) {
-	body, err := client.CallRestAPI(ctx, "/orgs/"+orgname, "", "GET", nil)
+	body, err := client.CallRestAPI(ctx, "/orgs/"+orgname, "", "GET", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +311,16 @@ func (g *GoliacRemoteImpl) AppIds(ctx context.Context) map[string]int {
 			g.ttlExpireAppIds = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.appIds
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rAppIds = make(map[string]int)
+	for k, v := range g.appIds {
+		rAppIds[k] = v
+	}
+	return rAppIds
 }
 
 func (g *GoliacRemoteImpl) Users(ctx context.Context) map[string]string {
@@ -321,7 +331,16 @@ func (g *GoliacRemoteImpl) Users(ctx context.Context) map[string]string {
 			g.ttlExpireUsers = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.users
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rUsers = make(map[string]string)
+	for k, v := range g.users {
+		rUsers[k] = v
+	}
+	return rUsers
 }
 
 func (g *GoliacRemoteImpl) TeamSlugByName(ctx context.Context) map[string]string {
@@ -333,7 +352,15 @@ func (g *GoliacRemoteImpl) TeamSlugByName(ctx context.Context) map[string]string
 			g.ttlExpireTeams = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.teamSlugByName
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rTeamSlugByName = make(map[string]string)
+	for k, v := range g.teamSlugByName {
+		rTeamSlugByName[k] = v
+	}
+	return rTeamSlugByName
 }
 
 /*
@@ -354,7 +381,16 @@ func (g *GoliacRemoteImpl) Teams(ctx context.Context, current bool) map[string]*
 			g.ttlExpireTeams = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.teams
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rTeams = make(map[string]*GithubTeam)
+	for k, v := range g.teams {
+		rTeams[k] = v
+	}
+	return rTeams
 }
 
 func (g *GoliacRemoteImpl) Repositories(ctx context.Context) map[string]*GithubRepository {
@@ -366,26 +402,38 @@ func (g *GoliacRemoteImpl) Repositories(ctx context.Context) map[string]*GithubR
 			g.ttlExpireRepositories = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.repositories
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rRepositories = make(map[string]*GithubRepository)
+	for k, v := range g.repositories {
+		rRepositories[k] = v
+	}
+	return rRepositories
 }
 
 func (g *GoliacRemoteImpl) TeamRepositories(ctx context.Context) map[string]map[string]*GithubTeamRepo {
 	if time.Now().After(g.ttlExpireTeamsRepos) {
-		if config.Config.GithubConcurrentThreads <= 1 {
-			teamsrepos, err := g.loadTeamReposNonConcurrently(ctx)
-			if err == nil {
-				g.teamRepos = teamsrepos
-				g.ttlExpireTeamsRepos = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
-			}
-		} else {
-			teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
-			if err == nil {
-				g.teamRepos = teamsrepos
-				g.ttlExpireTeamsRepos = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
-			}
+		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
+		if err == nil {
+			g.teamRepos = teamsrepos
+			g.ttlExpireTeamsRepos = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
 	}
-	return g.teamRepos
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
+	// copy the map to a safe one
+	var rTeamRepos = make(map[string]map[string]*GithubTeamRepo)
+	for k, v := range g.teamRepos {
+		rTeamRepos[k] = make(map[string]*GithubTeamRepo)
+		for k2, v2 := range v {
+			rTeamRepos[k][k2] = v2
+		}
+	}
+	return rTeamRepos
 }
 
 const listAllOrgMembers = `
@@ -820,6 +868,7 @@ func (g *GoliacRemoteImpl) loadAppIds(ctx context.Context) (map[string]int, erro
 		fmt.Sprintf("/orgs/%s/installations", config.Config.GithubAppOrganization),
 		"page=1&per_page=30",
 		"GET",
+		nil,
 		nil)
 
 	if err != nil {
@@ -843,6 +892,7 @@ func (g *GoliacRemoteImpl) loadAppIds(ctx context.Context) (map[string]int, erro
 				fmt.Sprintf("/orgs/%s/installations", config.Config.GithubAppOrganization),
 				fmt.Sprintf("page=%d&per_page=30", i),
 				"GET",
+				nil,
 				nil)
 
 			if err != nil {
@@ -886,6 +936,8 @@ func (g *GoliacRemoteImpl) Load(ctx context.Context, continueOnError bool) error
 		g.ttlExpireAppIds = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 	}
 
+	// the lock is here to avoid multiple calls to loadTeams (and it can be long)
+	// especially coming from the UI
 	g.loadTeamsMutex.Lock()
 	if time.Now().After(g.ttlExpireTeams) {
 		teams, teamSlugByName, err := g.loadTeams(ctx)
@@ -945,27 +997,15 @@ func (g *GoliacRemoteImpl) Load(ctx context.Context, continueOnError bool) error
 	}
 
 	if time.Now().After(g.ttlExpireTeamsRepos) {
-		if config.Config.GithubConcurrentThreads <= 1 {
-			teamsrepos, err := g.loadTeamReposNonConcurrently(ctx)
-			if err != nil {
-				if !continueOnError {
-					return err
-				}
-				logrus.Debugf("Error loading teams-repos: %v", err)
-				retErr = fmt.Errorf("error loading teams-repos: %v", err)
+		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
+		if err != nil {
+			if !continueOnError {
+				return err
 			}
-			g.teamRepos = teamsrepos
-		} else {
-			teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
-			if err != nil {
-				if !continueOnError {
-					return err
-				}
-				logrus.Debugf("Error loading teams-repos: %v", err)
-				retErr = fmt.Errorf("error loading teams-repos: %v", err)
-			}
-			g.teamRepos = teamsrepos
+			logrus.Debugf("Error loading teams-repos: %v", err)
+			retErr = fmt.Errorf("error loading teams-repos: %v", err)
 		}
+		g.teamRepos = teamsrepos
 		g.ttlExpireTeamsRepos = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 	}
 
@@ -974,41 +1014,6 @@ func (g *GoliacRemoteImpl) Load(ctx context.Context, continueOnError bool) error
 	logrus.Debugf("Nb remote repositories: %d", len(g.repositories))
 
 	return retErr
-}
-
-func (g *GoliacRemoteImpl) loadTeamReposNonConcurrently(ctx context.Context) (map[string]map[string]*GithubTeamRepo, error) {
-	var childSpan trace.Span
-	if config.Config.OpenTelemetryEnabled {
-		ctx, childSpan = otel.GetTracerProvider().Tracer("goliac").Start(ctx, "loadTeamReposNonConcurrently")
-		defer childSpan.End()
-	}
-	logrus.Debug("loading teamReposNonConcurrently")
-	teamRepos := make(map[string]map[string]*GithubTeamRepo)
-
-	teamsPerRepo := make(map[string]map[string]*GithubTeamRepo)
-	for repository := range g.repositories {
-		repos, err := g.loadTeamRepos(ctx, repository)
-		if err != nil {
-			return teamRepos, err
-		}
-		if g.feedback != nil {
-			g.feedback.LoadingAsset("teams_repos", 1)
-		}
-		teamsPerRepo[repository] = repos
-	}
-
-	// we have all the teams per repo, now we need to invert the map
-	for repository, repos := range teamsPerRepo {
-		for team, repo := range repos {
-			if _, ok := teamRepos[team]; ok {
-				teamRepos[team][repository] = repo
-			} else {
-				teamRepos[team] = map[string]*GithubTeamRepo{repository: repo}
-			}
-		}
-	}
-
-	return teamRepos, nil
 }
 
 func (g *GoliacRemoteImpl) loadTeamReposConcurrently(ctx context.Context, maxGoroutines int64) (map[string]map[string]*GithubTeamRepo, error) {
@@ -1033,6 +1038,9 @@ func (g *GoliacRemoteImpl) loadTeamReposConcurrently(ctx context.Context, maxGor
 		repos    map[string]*GithubTeamRepo
 	}, len(g.repositories))
 
+	if maxGoroutines < 1 {
+		maxGoroutines = 1
+	}
 	// Create worker goroutines
 	for i := int64(0); i < maxGoroutines; i++ {
 		wg.Add(1)
@@ -1114,35 +1122,47 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string)
 	// https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#list-repository-teams
 	teamsrepo := make(map[string]*GithubTeamRepo)
 
-	data, err := g.client.CallRestAPI(
-		ctx,
-		"/repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams",
-		"",
-		"GET",
-		nil)
-	if err != nil {
-		return nil, fmt.Errorf("not able to list teams for repo %s: %v", repository, err)
-	}
-
 	var teams []TeamsRepoResponse
-	err = json.Unmarshal(data, &teams)
-	if err != nil {
-		return nil, fmt.Errorf("not able to unmarshall teams for repo %s: %v", repository, err)
-	}
 
-	for _, t := range teams {
-		permission := ""
-		switch t.Permission {
-		case "admin":
-			permission = "ADMIN"
-		case "push":
-			permission = "WRITE"
-		case "pull":
-			permission = "READ"
+	page := 1
+	for page == 1 || len(teams) == 30 {
+		data, err := g.client.CallRestAPI(
+			ctx,
+			"/repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams",
+			fmt.Sprintf("page=%d&per_page=30", page),
+			"GET",
+			nil,
+			nil)
+		if err != nil {
+			return nil, fmt.Errorf("not able to list teams for repo %s: %v", repository, err)
 		}
-		teamsrepo[t.Slug] = &GithubTeamRepo{
-			Name:       repository,
-			Permission: permission,
+
+		err = json.Unmarshal(data, &teams)
+		if err != nil {
+			return nil, fmt.Errorf("not able to unmarshall teams for repo %s: %v", repository, err)
+		}
+
+		for _, t := range teams {
+			permission := ""
+			switch t.Permission {
+			case "admin":
+				permission = "ADMIN"
+			case "push":
+				permission = "WRITE"
+			case "pull":
+				permission = "READ"
+			}
+			teamsrepo[t.Slug] = &GithubTeamRepo{
+				Name:       repository,
+				Permission: permission,
+			}
+		}
+
+		page++
+
+		// sanity check to avoid loops
+		if page > FORLOOP_STOP {
+			break
 		}
 	}
 
@@ -1758,12 +1778,16 @@ func (g *GoliacRemoteImpl) AddRuleset(ctx context.Context, errorCollector *obser
 			"",
 			"POST",
 			g.prepareRuleset(ruleset),
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add ruleset to org: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	g.rulesets[ruleset.Name] = ruleset
 }
@@ -1779,12 +1803,16 @@ func (g *GoliacRemoteImpl) UpdateRuleset(ctx context.Context, errorCollector *ob
 			"",
 			"PUT",
 			g.prepareRuleset(ruleset),
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to update ruleset %d to org: %v. %s", ruleset.Id, err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	g.rulesets[ruleset.Name] = ruleset
 }
@@ -1800,12 +1828,16 @@ func (g *GoliacRemoteImpl) DeleteRuleset(ctx context.Context, errorCollector *ob
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove ruleset from org: %v", err))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	for _, r := range g.rulesets {
 		if r.Id == rulesetid {
@@ -1826,12 +1858,17 @@ func (g *GoliacRemoteImpl) AddRepositoryRuleset(ctx context.Context, errorCollec
 			"",
 			"POST",
 			g.prepareRuleset(ruleset),
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add ruleset to repository: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	repo := g.repositories[reponame]
 	if repo != nil {
 		repo.RuleSets[ruleset.Name] = ruleset
@@ -1849,12 +1886,17 @@ func (g *GoliacRemoteImpl) UpdateRepositoryRuleset(ctx context.Context, errorCol
 			"",
 			"PUT",
 			g.prepareRuleset(ruleset),
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to update ruleset %d to repository: %v. %s", ruleset.Id, err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	repo := g.repositories[reponame]
 	if repo != nil {
 		repo.RuleSets[ruleset.Name] = ruleset
@@ -1872,12 +1914,16 @@ func (g *GoliacRemoteImpl) DeleteRepositoryRuleset(ctx context.Context, errorCol
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove ruleset from repository: %v", err))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	repo := g.repositories[reponame]
 	if repo != nil {
@@ -1995,6 +2041,9 @@ func (g *GoliacRemoteImpl) AddRepositoryBranchProtection(ctx context.Context, er
 		branchprotection.Id = res.Data.CreateBranchProtectionRule.BranchProtectionRule.Id
 	}
 
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	repo.BranchProtections[branchprotection.Pattern] = branchprotection
 }
 
@@ -2077,6 +2126,9 @@ func (g *GoliacRemoteImpl) UpdateRepositoryBranchProtection(ctx context.Context,
 		}
 	}
 
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	repo := g.repositories[reponame]
 	if repo != nil {
 		repo.BranchProtections[branchprotection.Pattern] = branchprotection
@@ -2118,6 +2170,9 @@ func (g *GoliacRemoteImpl) DeleteRepositoryBranchProtection(ctx context.Context,
 		}
 	}
 
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	repo := g.repositories[reponame]
 	if repo != nil {
 		delete(repo.BranchProtections, branchprotection.Pattern)
@@ -2134,12 +2189,16 @@ func (g *GoliacRemoteImpl) AddUserToOrg(ctx context.Context, errorCollector *obs
 			"",
 			"PUT",
 			map[string]interface{}{"role": "member"},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add user to org: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	g.users[ghuserid] = ghuserid
 }
@@ -2154,12 +2213,16 @@ func (g *GoliacRemoteImpl) RemoveUserFromOrg(ctx context.Context, errorCollector
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove user from org: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	delete(g.users, ghuserid)
 }
@@ -2188,6 +2251,7 @@ func (g *GoliacRemoteImpl) CreateTeam(ctx context.Context, errorCollector *obser
 			"",
 			"POST",
 			params,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to create team: %v. %s", err, string(body)))
@@ -2209,6 +2273,7 @@ func (g *GoliacRemoteImpl) CreateTeam(ctx context.Context, errorCollector *obser
 				"",
 				"PUT",
 				map[string]interface{}{"role": "member"},
+				nil,
 			)
 			if err != nil {
 				errorCollector.AddError(fmt.Errorf("failed to add team member: %v. %s", err, string(body)))
@@ -2217,6 +2282,9 @@ func (g *GoliacRemoteImpl) CreateTeam(ctx context.Context, errorCollector *obser
 		}
 		slugname = res.Slug
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	g.teams[slugname] = &GithubTeam{
 		Name:        teamname,
@@ -2237,12 +2305,16 @@ func (g *GoliacRemoteImpl) UpdateTeamAddMember(ctx context.Context, errorCollect
 			"",
 			"PUT",
 			map[string]interface{}{"role": role},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add team member: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if role == "maintainer" {
 		if team, ok := g.teams[teamslug]; ok {
@@ -2285,12 +2357,16 @@ func (g *GoliacRemoteImpl) UpdateTeamUpdateMember(ctx context.Context, errorColl
 			"",
 			"PUT",
 			map[string]interface{}{"role": role},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to update team member: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if role == "maintainer" {
 		if team, ok := g.teams[teamslug]; ok {
@@ -2346,12 +2422,16 @@ func (g *GoliacRemoteImpl) UpdateTeamRemoveMember(ctx context.Context, errorColl
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove team member: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if team, ok := g.teams[teamslug]; ok {
 		members := team.Members
@@ -2387,6 +2467,7 @@ func (g *GoliacRemoteImpl) UpdateTeamSetParent(ctx context.Context, errorCollect
 			"",
 			"PATCH",
 			map[string]interface{}{"parent_team_id": parentTeam},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to set parent team: %v. %s", err, string(body)))
@@ -2405,12 +2486,16 @@ func (g *GoliacRemoteImpl) DeleteTeam(ctx context.Context, errorCollector *obser
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to delete a team: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	delete(g.teams, teamslug)
 	for name, slug := range g.teamSlugByName {
@@ -2433,7 +2518,7 @@ boolProperties are:
 - allow_update_branch
 - ...
 */
-func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, description string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string) {
+func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, description string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string, githubToken *string) {
 	repoId := 0
 	repoRefId := reponame
 	// create repository
@@ -2455,6 +2540,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 			"",
 			"POST",
 			props,
+			githubToken, // if nil, we use the default Goliac token
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to create repository: %v. %s", err, string(body)))
@@ -2472,13 +2558,17 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 		repoRefId = resp.NodeId
 	}
 
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
+
 	// update the repositories list
 	newRepo := &GithubRepository{
-		Name:           reponame,
-		Id:             repoId,
-		RefId:          repoRefId,
-		Visibility:     visibility,
-		BoolProperties: boolProperties,
+		Name:              reponame,
+		Id:                repoId,
+		RefId:             repoRefId,
+		Visibility:        visibility,
+		BoolProperties:    boolProperties,
+		DefaultBranchName: defaultBranch,
 	}
 	g.repositories[reponame] = newRepo
 	g.repositoriesByRefId[repoRefId] = newRepo
@@ -2493,6 +2583,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 				"",
 				"PUT",
 				map[string]interface{}{"permission": "pull"},
+				nil, // we keep the default Goliac token
 			)
 			if err != nil {
 				errorCollector.AddError(fmt.Errorf("failed to create repository (and add members): %v. %s", err, string(body)))
@@ -2519,6 +2610,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 				"",
 				"PUT",
 				map[string]interface{}{"permission": "push"},
+				nil, // we keep the default Goliac token
 			)
 			if err != nil {
 				errorCollector.AddError(fmt.Errorf("failed to create repository (and add members): %v. %s", err, string(body)))
@@ -2548,12 +2640,16 @@ func (g *GoliacRemoteImpl) UpdateRepositoryAddTeamAccess(ctx context.Context, er
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add team access: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	teamsRepos := g.teamRepos[teamslug]
 	if teamsRepos == nil {
@@ -2580,12 +2676,16 @@ func (g *GoliacRemoteImpl) UpdateRepositoryUpdateTeamAccess(ctx context.Context,
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to add team access: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	teamsRepos := g.teamRepos[teamslug]
 	if teamsRepos == nil {
@@ -2612,12 +2712,16 @@ func (g *GoliacRemoteImpl) UpdateRepositoryRemoveTeamAccess(ctx context.Context,
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove team access: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	teamsRepos := g.teamRepos[teamslug]
 	if teamsRepos != nil {
@@ -2642,12 +2746,16 @@ func (g *GoliacRemoteImpl) UpdateRepositoryUpdateProperty(ctx context.Context, e
 			"",
 			"PATCH",
 			map[string]interface{}{propertyName: propertyValue},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to update repository %s setting: %v. %s", propertyName, err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if repo, ok := g.repositories[reponame]; ok {
 		if propertyName == "visibility" {
@@ -2669,12 +2777,16 @@ func (g *GoliacRemoteImpl) UpdateRepositorySetExternalUser(ctx context.Context, 
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to set repository collaborator: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if repo, ok := g.repositories[reponame]; ok {
 		if permission == "push" {
@@ -2694,12 +2806,16 @@ func (g *GoliacRemoteImpl) updateRepositoryRemoveUser(ctx context.Context, error
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to remove repository collaborator: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	if repo, ok := g.repositories[reponame]; ok {
 		delete(repo.ExternalUsers, githubid)
@@ -2724,12 +2840,16 @@ func (g *GoliacRemoteImpl) DeleteRepository(ctx context.Context, errorCollector 
 			"",
 			"DELETE",
 			nil,
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to delete repository: %v. %s", err, string(body)))
 			return
 		}
 	}
+
+	g.actionMutex.Lock()
+	defer g.actionMutex.Unlock()
 
 	// update the repositories list
 	if r, ok := g.repositories[reponame]; ok {
@@ -2748,11 +2868,15 @@ func (g *GoliacRemoteImpl) RenameRepository(ctx context.Context, errorCollector 
 			"",
 			"PATCH",
 			map[string]interface{}{"name": newname},
+			nil,
 		)
 		if err != nil {
 			errorCollector.AddError(fmt.Errorf("failed to rename the repository %s (to %s): %v. %s", reponame, newname, err, string(body)))
 			return
 		}
+
+		g.actionMutex.Lock()
+		defer g.actionMutex.Unlock()
 
 		// update the repositories list
 		if r, ok := g.repositories[reponame]; ok {

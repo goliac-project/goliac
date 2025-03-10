@@ -13,8 +13,6 @@ Optionally, you can:
 
 ## 1. Creating the Goliac GitHub App
 
-Note: if you want an more restricted Github app, see [Security hardening](./security.md#security-hardening)
-
 In GitHub:
 - Register new GitHub App
   - in your profile settings, go to `Developer settings`/`GitHub Apps`

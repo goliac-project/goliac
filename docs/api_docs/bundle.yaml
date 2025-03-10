@@ -272,6 +272,52 @@ paths:
           description: generic error response
           schema:
             $ref: '#/definitions/error'
+  /external/createrepository:
+    post:
+      tags:
+        - app
+      operationId: postExternalCreateRepository
+      description: Create a Repository via Goliac
+      parameters:
+        - name: body
+          in: body
+          description: Repository to create
+          required: true
+          schema:
+            type: object
+            required:
+              - repository_name
+              - github_token
+              - team_name
+            properties:
+              repository_name:
+                type: string
+                minLength: 1
+                x-nullable: false
+              github_token:
+                type: string
+                minLength: 40
+                x-nullable: false
+              team_name:
+                type: string
+                minLength: 1
+                x-nullable: false
+              visibility:
+                type: string
+                default: private
+                x-nullable: false
+              default_branch:
+                type: string
+                default: main
+                minLength: 1
+                x-nullable: false
+      responses:
+        '200':
+          description: repository created
+        default:
+          description: generic error response
+          schema:
+            $ref: '#/definitions/error'
 definitions:
   health:
     type: object

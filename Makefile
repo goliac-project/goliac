@@ -36,6 +36,8 @@ doc:
 api_docs:
 	@echo "Installing swagger-merger" && npm install swagger-merger -g
 	@swagger-merger -i $(PWD)/swagger/index.yaml -o $(PWD)/docs/api_docs/bundle.yaml
+	@echo "Installing redoc-cli" && npm install redoc-cli -g
+	@redoc-cli bundle docs/api_docs/bundle.yaml -o docs/api_docs/index.html
 
 verifiers: verify_lint verify_swagger
 

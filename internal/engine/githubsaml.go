@@ -153,6 +153,7 @@ func LoadGithubLoginPendingInvitations(ctx context.Context, client github.GitHub
 	body, err := client.CallRestAPI(ctx, fmt.Sprintf("/orgs/%s/invitations", config.Config.GithubAppOrganization),
 		"",
 		"GET",
+		nil,
 		nil)
 
 	if err != nil {

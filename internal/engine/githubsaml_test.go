@@ -94,7 +94,7 @@ func (c *GithubSamlGitHubClient) QueryGraphQLAPI(ctx context.Context, query stri
 	return nil, nil
 }
 
-func (c *GithubSamlGitHubClient) CallRestAPI(context.Context, string, string, string, map[string]interface{}) ([]byte, error) {
+func (c *GithubSamlGitHubClient) CallRestAPI(context.Context, string, string, string, map[string]interface{}, *string) ([]byte, error) {
 	return nil, nil
 }
 func (c *GithubSamlGitHubClient) GetAccessToken(context.Context) (string, error) {

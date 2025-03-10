@@ -84,6 +84,9 @@ func NewGoliacAPI(spec *loads.Document) *GoliacAPI {
 		AppGetUsersHandler: app.GetUsersHandlerFunc(func(params app.GetUsersParams) middleware.Responder {
 			return middleware.NotImplemented("operation app.GetUsers has not yet been implemented")
 		}),
+		AppPostExternalCreateRepositoryHandler: app.PostExternalCreateRepositoryHandlerFunc(func(params app.PostExternalCreateRepositoryParams) middleware.Responder {
+			return middleware.NotImplemented("operation app.PostExternalCreateRepository has not yet been implemented")
+		}),
 		AppPostFlushCacheHandler: app.PostFlushCacheHandlerFunc(func(params app.PostFlushCacheParams) middleware.Responder {
 			return middleware.NotImplemented("operation app.PostFlushCache has not yet been implemented")
 		}),
@@ -153,6 +156,8 @@ type GoliacAPI struct {
 	AppGetUserHandler app.GetUserHandler
 	// AppGetUsersHandler sets the operation handler for the get users operation
 	AppGetUsersHandler app.GetUsersHandler
+	// AppPostExternalCreateRepositoryHandler sets the operation handler for the post external create repository operation
+	AppPostExternalCreateRepositoryHandler app.PostExternalCreateRepositoryHandler
 	// AppPostFlushCacheHandler sets the operation handler for the post flush cache operation
 	AppPostFlushCacheHandler app.PostFlushCacheHandler
 	// AppPostResyncHandler sets the operation handler for the post resync operation
@@ -272,6 +277,9 @@ func (o *GoliacAPI) Validate() error {
 	}
 	if o.AppGetUsersHandler == nil {
 		unregistered = append(unregistered, "app.GetUsersHandler")
+	}
+	if o.AppPostExternalCreateRepositoryHandler == nil {
+		unregistered = append(unregistered, "app.PostExternalCreateRepositoryHandler")
 	}
 	if o.AppPostFlushCacheHandler == nil {
 		unregistered = append(unregistered, "app.PostFlushCacheHandler")
@@ -419,6 +427,10 @@ func (o *GoliacAPI) initHandlerCache() {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
 	o.handlers["GET"]["/users"] = app.NewGetUsers(o.context, o.AppGetUsersHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/external/createrepository"] = app.NewPostExternalCreateRepository(o.context, o.AppPostExternalCreateRepositoryHandler)
 	if o.handlers["POST"] == nil {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}

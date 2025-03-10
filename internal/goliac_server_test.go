@@ -161,6 +161,8 @@ func (g *GoliacMock) GetLocal() engine.GoliacLocalResources {
 func (g *GoliacMock) GetRemote() engine.GoliacRemoteResources {
 	return g.remote
 }
+func (g *GoliacMock) ExternalCreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, fs billy.Filesystem, githubToken, newRepositoryName, team, visibility, newRepositoryDefaultBranch string, repositoryUrl, branch string) {
+}
 func (g *GoliacMock) SetRemoteObservability(feedback observability.RemoteObservability) error {
 	return nil
 }

@@ -91,6 +91,70 @@ func init() {
         }
       }
     },
+    "/external/createrepository": {
+      "post": {
+        "description": "Create a Repository via Goliac",
+        "tags": [
+          "app"
+        ],
+        "operationId": "postExternalCreateRepository",
+        "parameters": [
+          {
+            "description": "Repository to create",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "repository_name",
+                "github_token",
+                "team_name"
+              ],
+              "properties": {
+                "default_branch": {
+                  "type": "string",
+                  "default": "main",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "github_token": {
+                  "type": "string",
+                  "minLength": 40,
+                  "x-nullable": false
+                },
+                "repository_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "team_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "visibility": {
+                  "type": "string",
+                  "default": "private",
+                  "x-nullable": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "repository created"
+          },
+          "default": {
+            "description": "generic error response",
+            "schema": {
+              "$ref": "#/definitions/error"
+            }
+          }
+        }
+      }
+    },
     "/flushcache": {
       "post": {
         "description": "Flush the Github remote cache",
@@ -887,6 +951,70 @@ func init() {
             "schema": {
               "$ref": "#/definitions/collaboratorDetails"
             }
+          },
+          "default": {
+            "description": "generic error response",
+            "schema": {
+              "$ref": "#/definitions/error"
+            }
+          }
+        }
+      }
+    },
+    "/external/createrepository": {
+      "post": {
+        "description": "Create a Repository via Goliac",
+        "tags": [
+          "app"
+        ],
+        "operationId": "postExternalCreateRepository",
+        "parameters": [
+          {
+            "description": "Repository to create",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "repository_name",
+                "github_token",
+                "team_name"
+              ],
+              "properties": {
+                "default_branch": {
+                  "type": "string",
+                  "default": "main",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "github_token": {
+                  "type": "string",
+                  "minLength": 40,
+                  "x-nullable": false
+                },
+                "repository_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "team_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "x-nullable": false
+                },
+                "visibility": {
+                  "type": "string",
+                  "default": "private",
+                  "x-nullable": false
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "repository created"
           },
           "default": {
             "description": "generic error response",

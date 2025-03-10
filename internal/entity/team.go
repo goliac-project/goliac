@@ -87,7 +87,7 @@ func recursiveReadTeamDirectory(fs billy.Filesystem, dirname string, parentTeam 
 
 	team, err := NewTeam(fs, filepath.Join(dirname, "team.yaml"), parentTeam)
 	if err != nil {
-		errorCollector.AddError(err)
+		errorCollector.AddError(fmt.Errorf("team not found in %s: %v", dirname, err))
 		return
 	} else {
 		team.Validate(dirname, users, errorCollector)

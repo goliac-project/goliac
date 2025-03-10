@@ -397,7 +397,7 @@ func (m *MockGithubClient) QueryGraphQLAPI(ctx context.Context, query string, va
 	return j, nil
 }
 
-func (m *MockGithubClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}) ([]byte, error) {
+func (m *MockGithubClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
 	// /repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams
 	if strings.HasPrefix(endpoint, "/repos/"+config.Config.GithubAppOrganization+"/repo_") {
 		// we still pretend we have 133 teams, cf L263
@@ -502,7 +502,7 @@ type GitHubClientIsEnterpriseMock struct {
 func (g *GitHubClientIsEnterpriseMock) QueryGraphQLAPI(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
 	return []byte(""), nil
 }
-func (g *GitHubClientIsEnterpriseMock) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}) ([]byte, error) {
+func (g *GitHubClientIsEnterpriseMock) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
 	return g.results[endpoint], g.err
 }
 func (g *GitHubClientIsEnterpriseMock) GetAccessToken(ctx context.Context) (string, error) {

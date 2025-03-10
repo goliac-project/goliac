@@ -485,6 +485,10 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 		}
 		readers := make([]string, 0)
 		for _, r := range lRepo.Spec.Readers {
+			// dont add the owner to the readers (if listed)
+			if lRepo.Owner != nil && *lRepo.Owner == r {
+				continue
+			}
 			readers = append(readers, slug.Make(r))
 		}
 
@@ -1006,7 +1010,7 @@ func (r *GoliacReconciliatorImpl) CreateRepository(ctx context.Context, errorCol
 	logrus.WithFields(map[string]interface{}{"dryrun": dryrun, "command": "create_repository"}).Infof("repositoryname: %s, readers: %s, writers: %s, boolProperties: %v", reponame, strings.Join(readers, ","), strings.Join(writers, ","), boolProperties)
 	remote.CreateRepository(reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch)
 	if r.executor != nil {
-		r.executor.CreateRepository(ctx, errorCollector, dryrun, reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch)
+		r.executor.CreateRepository(ctx, errorCollector, dryrun, reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch, nil)
 	}
 }
 func (r *GoliacReconciliatorImpl) UpdateRepositoryAddTeamAccess(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, teamslug string, permission string) {
