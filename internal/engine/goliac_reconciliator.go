@@ -632,7 +632,15 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 		}
 
 		if lRepo.Visibility != rRepo.Visibility {
-			return false
+			// check back if the remote repo is a fork
+			// in this case, we cannot change the visibility
+			if rr, ok := ghRepos[reponame]; ok {
+				if !rr.IsFork {
+					return false
+				}
+			} else {
+				return false
+			}
 		}
 
 		if lRepo.DefaultBranchName != rRepo.DefaultBranchName {
@@ -670,7 +678,15 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			}
 		}
 		if lRepo.Visibility != rRepo.Visibility {
-			r.UpdateRepositoryUpdateProperty(ctx, errorCollector, dryrun, remote, reponame, "visibility", lRepo.Visibility)
+			// check back if the remote repo is a fork
+			// in this case, we cannot change the visibility
+			if rr, ok := ghRepos[reponame]; ok {
+				if !rr.IsFork {
+					r.UpdateRepositoryUpdateProperty(ctx, errorCollector, dryrun, remote, reponame, "visibility", lRepo.Visibility)
+				}
+			} else {
+				r.UpdateRepositoryUpdateProperty(ctx, errorCollector, dryrun, remote, reponame, "visibility", lRepo.Visibility)
+			}
 		}
 		if lRepo.DefaultBranchName != rRepo.DefaultBranchName {
 			r.UpdateRepositoryUpdateProperty(ctx, errorCollector, dryrun, remote, reponame, "default_branch", lRepo.DefaultBranchName)
@@ -753,7 +769,16 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			// calling onChanged to update the repository permissions
 			onChanged(reponame, aRepo, rRepo)
 		} else {
-			r.CreateRepository(ctx, errorCollector, dryrun, remote, reponame, reponame, lRepo.Visibility, lRepo.Writers, lRepo.Readers, lRepo.BoolProperties, lRepo.DefaultBranchName)
+			// check if the repo is a fork
+			if lr, ok := localRepositories[reponame]; ok {
+				if lr.ForkFrom != "" {
+					r.CreateRepository(ctx, errorCollector, dryrun, remote, reponame, reponame, lRepo.Visibility, lRepo.Writers, lRepo.Readers, lRepo.BoolProperties, lRepo.DefaultBranchName, lr.ForkFrom)
+				} else {
+					r.CreateRepository(ctx, errorCollector, dryrun, remote, reponame, reponame, lRepo.Visibility, lRepo.Writers, lRepo.Readers, lRepo.BoolProperties, lRepo.DefaultBranchName, "")
+				}
+			} else {
+				r.CreateRepository(ctx, errorCollector, dryrun, remote, reponame, reponame, lRepo.Visibility, lRepo.Writers, lRepo.Readers, lRepo.BoolProperties, lRepo.DefaultBranchName, "")
+			}
 		}
 	}
 
@@ -1020,11 +1045,11 @@ func (r *GoliacReconciliatorImpl) DeleteTeam(ctx context.Context, errorCollector
 		r.unmanaged.Teams[teamslug] = true
 	}
 }
-func (r *GoliacReconciliatorImpl) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string) {
+func (r *GoliacReconciliatorImpl) CreateRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string, forkFrom string) {
 	logrus.WithFields(map[string]interface{}{"dryrun": dryrun, "command": "create_repository"}).Infof("repositoryname: %s, readers: %s, writers: %s, boolProperties: %v", reponame, strings.Join(readers, ","), strings.Join(writers, ","), boolProperties)
-	remote.CreateRepository(reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch)
+	remote.CreateRepository(reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch, forkFrom)
 	if r.executor != nil {
-		r.executor.CreateRepository(ctx, errorCollector, dryrun, reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch, nil)
+		r.executor.CreateRepository(ctx, errorCollector, dryrun, reponame, reponame, visibility, writers, readers, boolProperties, defaultBranch, nil, forkFrom)
 	}
 }
 func (r *GoliacReconciliatorImpl) UpdateRepositoryAddTeamAccess(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, teamslug string, permission string) {

@@ -81,6 +81,22 @@ spec:
   default_branch: master
 ```
 
+## Create a repository from a fork
+
+You can also create the repository from a fork:
+
+```yaml
+apiVersion: v1
+kind: Repository
+name: awesome-repository
+spec:
+  forkFrom: "another_org/another_repository"
+  ...
+```
+
+Note: you cannot change the visibility of a forked repository
+
+
 ## Rename a repository
 
 You need to add a `renameTo` to the repository, and Goliac will rename it (and update the `goliac-teams` repository):

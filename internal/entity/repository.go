@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-git/go-billy/v5"
@@ -30,6 +31,7 @@ type Repository struct {
 	Owner         *string `yaml:"-"`                  // implicit. team name owning the repo (if any)
 	RenameTo      string  `yaml:"renameTo,omitempty"`
 	DirectoryPath string  `yaml:"-"` // used to know where to rename the repository
+	ForkFrom      string  `yaml:"forkFrom,omitempty"`
 }
 
 type RepositoryRuleSet struct {
@@ -251,6 +253,15 @@ func (r *Repository) Validate(filename string, teams map[string]*Team, externalU
 
 	if utils.GithubAnsiString(r.Name) != r.Name {
 		return fmt.Errorf("invalid name: %s will be changed to %s (check repository filename %s)", r.Name, utils.GithubAnsiString(r.Name), filename)
+	}
+
+	if r.ForkFrom != "" {
+		// formFrom must be "organization/repository"
+		var forkFromPattern = regexp.MustCompile(`^[^/]+/[^/]+$`)
+
+		if !forkFromPattern.MatchString(r.ForkFrom) {
+			return fmt.Errorf("invalid fork format: %s - must be in the format 'organization/repository'", r.ForkFrom)
+		}
 	}
 
 	return nil

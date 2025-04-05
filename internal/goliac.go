@@ -93,7 +93,7 @@ func NewGoliacImpl() (Goliac, error) {
 	}
 
 	local := engine.NewGoliacLocalImpl()
-	remote := engine.NewGoliacRemoteImpl(remoteGithubClient)
+	remote := engine.NewGoliacRemoteImpl(remoteGithubClient, config.Config.GithubAppOrganization)
 
 	usersync.InitPlugins(remoteGithubClient)
 
@@ -244,6 +244,7 @@ func (g *GoliacImpl) ExternalCreateRepository(ctx context.Context, errorCollecto
 		},
 		newRepositoryDefaultBranch,
 		&githubToken,
+		"",
 	)
 
 	if errorCollector.HasErrors() {

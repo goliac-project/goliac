@@ -169,13 +169,14 @@ func (m *MutableGoliacRemoteImpl) DeleteTeam(teamslug string) {
 		delete(m.teamRepos, teamslug)
 	}
 }
-func (m *MutableGoliacRemoteImpl) CreateRepository(reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string) {
+func (m *MutableGoliacRemoteImpl) CreateRepository(reponame string, descrition string, visibility string, writers []string, readers []string, boolProperties map[string]bool, defaultBranch string, forkFrom string) {
 	r := GithubRepository{
 		Name:              reponame,
 		Visibility:        visibility,
 		BoolProperties:    boolProperties,
 		ExternalUsers:     map[string]string{},
 		DefaultBranchName: defaultBranch,
+		IsFork:            forkFrom != "",
 	}
 	m.repositories[reponame] = &r
 }

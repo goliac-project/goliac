@@ -34,7 +34,7 @@ import { User, MessageBox, Folder, Tools } from '@element-plus/icons-vue'
           </el-menu-item>
           <el-menu-item v-if="nbWorkflows>0" index="/workflows">
             <template #title>
-              <el-icon :size="16"><Tools /></el-icon>PR Workflows
+              <el-icon :size="16"><Tools /></el-icon>Workflows
             </template>
           </el-menu-item>
         </el-menu>

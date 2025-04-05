@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goliac-project/goliac/internal/config"
 	"github.com/goliac-project/goliac/internal/github"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -398,10 +397,10 @@ func (m *MockGithubClient) QueryGraphQLAPI(ctx context.Context, query string, va
 }
 
 func (m *MockGithubClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
-	// /repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams
-	if strings.HasPrefix(endpoint, "/repos/"+config.Config.GithubAppOrganization+"/repo_") {
+	// /repos/myorg/"+repository+"/teams
+	if strings.HasPrefix(endpoint, "/repos/myorg/repo_") {
 		// we still pretend we have 133 teams, cf L263
-		repoSuffix := strings.TrimPrefix(endpoint, "/repos/"+config.Config.GithubAppOrganization+"/repo_")
+		repoSuffix := strings.TrimPrefix(endpoint, "/repos/myorg/repo_")
 		repoIdStr := strings.Split(repoSuffix, "/")[0]
 		repoId, err := strconv.Atoi(repoIdStr)
 		if err != nil {
@@ -446,7 +445,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		repositories, _, err := remoteImpl.loadRepositories(ctx)
@@ -461,7 +460,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		teams, _, err := remoteImpl.loadTeams(ctx)
@@ -474,7 +473,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		repos, err := remoteImpl.loadTeamRepos(ctx, "repo_0")
@@ -487,7 +486,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		err := remoteImpl.Load(ctx, false)
@@ -630,7 +629,7 @@ func TestIsEnterprise(t *testing.T) {
 func TestPrepareRuleset(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg")
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",
@@ -674,7 +673,7 @@ repositories:
 
 	t.Run("happy path: non default branch name", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg")
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",

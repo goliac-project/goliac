@@ -1,3 +1,7 @@
+## Goliac v0.17.3
+
+- allow to create a repository from a fork
+
 ## Goliac v0.17.2
 
 - restructure workflows to be a bit more generic (for example to open the door for a "delete repository" workflow)
