@@ -93,7 +93,7 @@ func NewGoliacImpl() (Goliac, error) {
 	}
 
 	local := engine.NewGoliacLocalImpl()
-	remote := engine.NewGoliacRemoteImpl(remoteGithubClient)
+	remote := engine.NewGoliacRemoteImpl(remoteGithubClient, config.Config.GithubAppOrganization)
 
 	usersync.InitPlugins(remoteGithubClient)
 

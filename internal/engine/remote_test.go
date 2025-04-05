@@ -446,7 +446,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		repositories, _, err := remoteImpl.loadRepositories(ctx)
@@ -461,7 +461,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		teams, _, err := remoteImpl.loadTeams(ctx)
@@ -474,7 +474,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		repos, err := remoteImpl.loadTeamRepos(ctx, "repo_0")
@@ -487,7 +487,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
 		err := remoteImpl.Load(ctx, false)
@@ -630,7 +630,7 @@ func TestIsEnterprise(t *testing.T) {
 func TestPrepareRuleset(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg")
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",
@@ -674,7 +674,7 @@ repositories:
 
 	t.Run("happy path: non default branch name", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg")
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",

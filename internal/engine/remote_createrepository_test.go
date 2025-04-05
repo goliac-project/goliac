@@ -1,0 +1,379 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
+
+	"github.com/goliac-project/goliac/internal/observability"
+	"github.com/stretchr/testify/assert"
+)
+
+// CreateRepositoryMockClient is a dedicated mock client for CreateRepository tests
+type CreateRepositoryMockClient struct {
+	// Track calls to verify test behavior
+	lastEndpoint string
+	lastMethod   string
+	lastBody     map[string]interface{}
+
+	// Configure mock responses
+	shouldError    bool
+	errorMessage   string
+	responseID     int
+	responseNodeID string
+	responseName   string
+}
+
+func (m *CreateRepositoryMockClient) QueryGraphQLAPI(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (m *CreateRepositoryMockClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
+	// Store the call details for verification
+	m.lastEndpoint = endpoint
+	m.lastMethod = method
+	m.lastBody = body
+
+	if m.shouldError {
+		return nil, fmt.Errorf(m.errorMessage)
+	}
+
+	// Return a successful response
+	response := map[string]interface{}{
+		"id":      m.responseID,
+		"node_id": m.responseNodeID,
+		"name":    m.responseName,
+	}
+
+	jsonResponse, _ := json.Marshal(response)
+	return jsonResponse, nil
+}
+
+func (m *CreateRepositoryMockClient) GetAccessToken(ctx context.Context) (string, error) {
+	return "mock-token", nil
+}
+
+func (m *CreateRepositoryMockClient) CreateJWT() (string, error) {
+	return "mock-jwt", nil
+}
+
+func (m *CreateRepositoryMockClient) GetAppSlug() string {
+	return "mock-app"
+}
+
+func TestCreateRepository(t *testing.T) {
+	t.Run("happy path: create repository with fork", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{
+			responseID:     123,
+			responseNodeID: "R_123",
+			responseName:   "forked-repo",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Test creating a forked repository
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			false,
+			"forked-repo",
+			"A forked repository",
+			"private",
+			[]string{},
+			[]string{},
+			map[string]bool{
+				"delete_branch_on_merge": false,
+				"allow_update_branch":    false,
+				"archived":               false,
+				"allow_auto_merge":       false,
+			},
+			"main",
+			nil,
+			"original-org/source-repo",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "/orgs/original-org/source-repo/forks", mockClient.lastEndpoint)
+		assert.Equal(t, "POST", mockClient.lastMethod)
+		assert.Equal(t, map[string]interface{}{
+			"organization": "myorg",
+			"name":         "forked-repo",
+		}, mockClient.lastBody)
+
+		// Verify the repository was created in our cache
+		repos := remoteImpl.Repositories(ctx)
+		fmt.Println(repos)
+		assert.Contains(t, repos, "forked-repo")
+
+		// Verify the repository properties
+		repo := repos["forked-repo"]
+		assert.Equal(t, 123, repo.Id)
+		assert.Equal(t, "R_123", repo.RefId)
+		assert.Equal(t, "private", repo.Visibility)
+		assert.Equal(t, "main", repo.DefaultBranchName)
+		assert.True(t, repo.IsFork)
+		assert.Equal(t, map[string]bool{
+			"delete_branch_on_merge": false,
+			"allow_update_branch":    false,
+			"archived":               false,
+			"allow_auto_merge":       false,
+		}, repo.BoolProperties)
+	})
+
+	t.Run("happy path: create repository with fork and team", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{
+			responseID:     123,
+			responseNodeID: "R_123",
+			responseName:   "forked-repo",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Test creating a forked repository
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			false,
+			"forked-repo",
+			"A forked repository",
+			"private",
+			[]string{"team1"},
+			[]string{},
+			map[string]bool{
+				"delete_branch_on_merge": false,
+				"allow_update_branch":    false,
+				"archived":               false,
+				"allow_auto_merge":       false,
+			},
+			"main",
+			nil,
+			"original-org/source-repo",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "orgs/myorg/teams/team1/repos/myorg/forked-repo", mockClient.lastEndpoint)
+		assert.Equal(t, "PUT", mockClient.lastMethod)
+		assert.Equal(t, map[string]interface{}{
+			"permission": "push",
+		}, mockClient.lastBody)
+
+		// Verify the repository was created in our cache
+		repos := remoteImpl.Repositories(ctx)
+		assert.Contains(t, repos, "forked-repo")
+
+		// Verify the repository properties
+		repo := repos["forked-repo"]
+		assert.Equal(t, 123, repo.Id)
+		assert.Equal(t, "R_123", repo.RefId)
+		assert.Equal(t, "private", repo.Visibility)
+		assert.Equal(t, "main", repo.DefaultBranchName)
+		assert.True(t, repo.IsFork)
+		assert.Equal(t, map[string]bool{
+			"delete_branch_on_merge": false,
+			"allow_update_branch":    false,
+			"archived":               false,
+			"allow_auto_merge":       false,
+		}, repo.BoolProperties)
+	})
+
+	t.Run("error path: invalid fork format", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{
+			shouldError:  true,
+			errorMessage: "invalid fork format",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Test with invalid fork format
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			false,
+			"forked-repo",
+			"A forked repository",
+			"private",
+			[]string{},
+			[]string{},
+			map[string]bool{},
+			"main",
+			nil,
+			"invalid-fork-format", // Invalid format - should be "org/repo"
+		)
+
+		// Verify error was collected
+		assert.True(t, errorCollector.HasErrors())
+		assert.Contains(t, errorCollector.Errors[0].Error(), "invalid fork format")
+	})
+
+	t.Run("error path: fork API error", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{
+			shouldError:  true,
+			errorMessage: "repository not found",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Test forking a non-existent repository
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			false,
+			"forked-repo",
+			"A forked repository",
+			"private",
+			[]string{},
+			[]string{},
+			map[string]bool{},
+			"main",
+			nil,
+			"original-org/non-existent-repo",
+		)
+
+		// Verify error was collected
+		assert.True(t, errorCollector.HasErrors())
+		assert.Contains(t, errorCollector.Errors[0].Error(), "failed to fork repository")
+
+		// Verify the API call was attempted
+		assert.Equal(t, "/orgs/original-org/non-existent-repo/forks", mockClient.lastEndpoint)
+		assert.Equal(t, "POST", mockClient.lastMethod)
+	})
+
+	t.Run("happy path: create regular repository", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{
+			responseID:     456,
+			responseNodeID: "R_456",
+			responseName:   "new-repo",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Test creating a regular repository
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			false,
+			"new-repo",
+			"A new repository",
+			"private",
+			[]string{},
+			[]string{},
+			map[string]bool{
+				"delete_branch_on_merge": true,
+				"allow_update_branch":    false,
+				"archived":               false,
+				"allow_auto_merge":       true,
+			},
+			"main",
+			nil,
+			"", // No fork
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "/orgs/myorg/repos", mockClient.lastEndpoint)
+		assert.Equal(t, "POST", mockClient.lastMethod)
+		assert.Equal(t, map[string]interface{}{
+			"name":                   "new-repo",
+			"description":            "A new repository",
+			"visibility":             "private",
+			"default_branch":         "main",
+			"delete_branch_on_merge": true,
+			"allow_update_branch":    false,
+			"archived":               false,
+			"allow_auto_merge":       true,
+		}, mockClient.lastBody)
+
+		// Verify the repository was created in our cache
+		repos := remoteImpl.Repositories(ctx)
+		assert.Contains(t, repos, "new-repo")
+
+		// Verify the repository properties
+		repo := repos["new-repo"]
+		assert.Equal(t, 456, repo.Id)
+		assert.Equal(t, "R_456", repo.RefId)
+		assert.Equal(t, "private", repo.Visibility)
+		assert.Equal(t, "main", repo.DefaultBranchName)
+		assert.False(t, repo.IsFork)
+		assert.Equal(t, map[string]bool{
+			"delete_branch_on_merge": true,
+			"allow_update_branch":    false,
+			"archived":               false,
+			"allow_auto_merge":       true,
+		}, repo.BoolProperties)
+	})
+
+	t.Run("happy path: dry run", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &CreateRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		// initiate the cache
+		remoteImpl.Load(ctx, false)
+		mockClient.lastEndpoint = ""
+		mockClient.lastMethod = ""
+
+		errorCollector := observability.NewErrorCollection()
+
+		// Test creating a repository in dry run mode
+		remoteImpl.CreateRepository(
+			ctx,
+			errorCollector,
+			true, // dryrun
+			"dry-run-repo",
+			"A dry run repository",
+			"private",
+			[]string{},
+			[]string{},
+			map[string]bool{},
+			"main",
+			nil,
+			"",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify no API call was made
+		assert.Empty(t, mockClient.lastEndpoint)
+		assert.Empty(t, mockClient.lastMethod)
+
+		// Verify the repository was still added to our cache
+		repos := remoteImpl.Repositories(ctx)
+		assert.Contains(t, repos, "dry-run-repo")
+	})
+}

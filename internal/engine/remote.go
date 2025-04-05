@@ -107,6 +107,7 @@ type GoliacRemoteImpl struct {
 	feedback              observability.RemoteObservability
 	loadTeamsMutex        sync.Mutex
 	actionMutex           sync.Mutex
+	configGithubOrg       string
 }
 
 type GHESInfo struct {
@@ -180,7 +181,7 @@ type GraplQLAssets struct {
 
 func (g *GoliacRemoteImpl) CountAssets(ctx context.Context) (int, error) {
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 
 	data, err := g.client.QueryGraphQLAPI(ctx, getAssets, variables)
 	if err != nil {
@@ -252,7 +253,7 @@ func isEnterprise(ctx context.Context, orgname string, client github.GitHubClien
 	return false
 }
 
-func NewGoliacRemoteImpl(client github.GitHubClient) *GoliacRemoteImpl {
+func NewGoliacRemoteImpl(client github.GitHubClient, configGithubOrg string) *GoliacRemoteImpl {
 	ctx := context.Background()
 	return &GoliacRemoteImpl{
 		client:                client,
@@ -270,8 +271,9 @@ func NewGoliacRemoteImpl(client github.GitHubClient) *GoliacRemoteImpl {
 		ttlExpireTeamsRepos:   time.Now(),
 		ttlExpireRulesets:     time.Now(),
 		ttlExpireAppIds:       time.Now(),
-		isEnterprise:          isEnterprise(ctx, config.Config.GithubAppOrganization, client),
+		isEnterprise:          isEnterprise(ctx, configGithubOrg, client),
 		feedback:              nil,
+		configGithubOrg:       configGithubOrg,
 	}
 }
 
@@ -495,7 +497,7 @@ func (g *GoliacRemoteImpl) loadOrgUsers(ctx context.Context) (map[string]string,
 	users := make(map[string]string)
 
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 	variables["endCursor"] = nil
 
 	hasNextPage := true
@@ -720,7 +722,7 @@ func (g *GoliacRemoteImpl) loadRepositories(ctx context.Context) (map[string]*Gi
 	repositoriesByRefId := make(map[string]*GithubRepository)
 
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 	variables["endCursor"] = nil
 
 	var retErr error
@@ -869,7 +871,7 @@ func (g *GoliacRemoteImpl) loadAppIds(ctx context.Context) (map[string]int, erro
 
 	// https://docs.github.com/en/enterprise-cloud@latest/rest/orgs/orgs?apiVersion=2022-11-28#list-app-installations-for-an-organization
 	body, err := g.client.CallRestAPI(ctx,
-		fmt.Sprintf("/orgs/%s/installations", config.Config.GithubAppOrganization),
+		fmt.Sprintf("/orgs/%s/installations", g.configGithubOrg),
 		"page=1&per_page=30",
 		"GET",
 		nil,
@@ -893,7 +895,7 @@ func (g *GoliacRemoteImpl) loadAppIds(ctx context.Context) (map[string]int, erro
 		// we need to paginate
 		for i := 2; i <= (installations.TotalCount/30)+1; i++ {
 			body, err := g.client.CallRestAPI(ctx,
-				fmt.Sprintf("/orgs/%s/installations", config.Config.GithubAppOrganization),
+				fmt.Sprintf("/orgs/%s/installations", g.configGithubOrg),
 				fmt.Sprintf("page=%d&per_page=30", i),
 				"GET",
 				nil,
@@ -1132,7 +1134,7 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string)
 	for page == 1 || len(teams) == 30 {
 		data, err := g.client.CallRestAPI(
 			ctx,
-			"/repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams",
+			"/repos/"+g.configGithubOrg+"/"+repository+"/teams",
 			fmt.Sprintf("page=%d&per_page=30", page),
 			"GET",
 			nil,
@@ -1236,7 +1238,7 @@ func (g *GoliacRemoteImpl) loadTeams(ctx context.Context) (map[string]*GithubTea
 	teamSlugByName := make(map[string]string)
 
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 	variables["endCursor"] = nil
 
 	hasNextPage := true
@@ -1348,7 +1350,7 @@ func (g *GoliacRemoteImpl) loadTeams(ctx context.Context) (map[string]*GithubTea
 
 func (g *GoliacRemoteImpl) loadTeamsMembers(ctx context.Context, t *GithubTeam) error {
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 	variables["endCursor"] = nil
 	variables["teamSlug"] = t.Slug
 
@@ -1622,7 +1624,7 @@ func (g *GoliacRemoteImpl) loadRulesets(ctx context.Context) (map[string]*Github
 	}
 	logrus.Debug("loading rulesets")
 	variables := make(map[string]interface{})
-	variables["orgLogin"] = config.Config.GithubAppOrganization
+	variables["orgLogin"] = g.configGithubOrg
 	variables["endCursor"] = nil
 
 	rulesets := make(map[string]*GithubRuleSet)
@@ -1798,7 +1800,7 @@ func (g *GoliacRemoteImpl) AddRuleset(ctx context.Context, errorCollector *obser
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/rulesets", config.Config.GithubAppOrganization),
+			fmt.Sprintf("/orgs/%s/rulesets", g.configGithubOrg),
 			"",
 			"POST",
 			g.prepareRuleset(ruleset),
@@ -1823,7 +1825,7 @@ func (g *GoliacRemoteImpl) UpdateRuleset(ctx context.Context, errorCollector *ob
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/rulesets/%d", config.Config.GithubAppOrganization, ruleset.Id),
+			fmt.Sprintf("/orgs/%s/rulesets/%d", g.configGithubOrg, ruleset.Id),
 			"",
 			"PUT",
 			g.prepareRuleset(ruleset),
@@ -1848,7 +1850,7 @@ func (g *GoliacRemoteImpl) DeleteRuleset(ctx context.Context, errorCollector *ob
 	if !dryrun {
 		_, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/rulesets/%d", config.Config.GithubAppOrganization, rulesetid),
+			fmt.Sprintf("/orgs/%s/rulesets/%d", g.configGithubOrg, rulesetid),
 			"",
 			"DELETE",
 			nil,
@@ -1878,7 +1880,7 @@ func (g *GoliacRemoteImpl) AddRepositoryRuleset(ctx context.Context, errorCollec
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/repos/%s/%s/rulesets", config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("/repos/%s/%s/rulesets", g.configGithubOrg, reponame),
 			"",
 			"POST",
 			g.prepareRuleset(ruleset),
@@ -1906,7 +1908,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryRuleset(ctx context.Context, errorCol
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/repos/%s/%s/rulesets/%d", config.Config.GithubAppOrganization, reponame, ruleset.Id),
+			fmt.Sprintf("/repos/%s/%s/rulesets/%d", g.configGithubOrg, reponame, ruleset.Id),
 			"",
 			"PUT",
 			g.prepareRuleset(ruleset),
@@ -1934,7 +1936,7 @@ func (g *GoliacRemoteImpl) DeleteRepositoryRuleset(ctx context.Context, errorCol
 	if !dryrun {
 		_, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/repos/%s/%s/rulesets/%d", config.Config.GithubAppOrganization, reponame, rulesetid),
+			fmt.Sprintf("/repos/%s/%s/rulesets/%d", g.configGithubOrg, reponame, rulesetid),
 			"",
 			"DELETE",
 			nil,
@@ -2222,7 +2224,7 @@ func (g *GoliacRemoteImpl) AddUserToOrg(ctx context.Context, errorCollector *obs
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/memberships/%s", config.Config.GithubAppOrganization, ghuserid),
+			fmt.Sprintf("/orgs/%s/memberships/%s", g.configGithubOrg, ghuserid),
 			"",
 			"PUT",
 			map[string]interface{}{"role": "member"},
@@ -2246,7 +2248,7 @@ func (g *GoliacRemoteImpl) RemoveUserFromOrg(ctx context.Context, errorCollector
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/memberships/%s", config.Config.GithubAppOrganization, ghuserid),
+			fmt.Sprintf("/orgs/%s/memberships/%s", g.configGithubOrg, ghuserid),
 			"",
 			"DELETE",
 			nil,
@@ -2284,7 +2286,7 @@ func (g *GoliacRemoteImpl) CreateTeam(ctx context.Context, errorCollector *obser
 		}
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams", config.Config.GithubAppOrganization),
+			fmt.Sprintf("/orgs/%s/teams", g.configGithubOrg),
 			"",
 			"POST",
 			params,
@@ -2306,7 +2308,7 @@ func (g *GoliacRemoteImpl) CreateTeam(ctx context.Context, errorCollector *obser
 			// https://docs.github.com/en/rest/teams/members?apiVersion=2022-11-28#add-or-update-team-membership-for-a-user
 			body, err := g.client.CallRestAPI(
 				ctx,
-				fmt.Sprintf("orgs/%s/teams/%s/memberships/%s", config.Config.GithubAppOrganization, res.Slug, member),
+				fmt.Sprintf("orgs/%s/teams/%s/memberships/%s", g.configGithubOrg, res.Slug, member),
 				"",
 				"PUT",
 				map[string]interface{}{"role": "member"},
@@ -2338,7 +2340,7 @@ func (g *GoliacRemoteImpl) UpdateTeamAddMember(ctx context.Context, errorCollect
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s/memberships/%s", config.Config.GithubAppOrganization, teamslug, username),
+			fmt.Sprintf("/orgs/%s/teams/%s/memberships/%s", g.configGithubOrg, teamslug, username),
 			"",
 			"PUT",
 			map[string]interface{}{"role": role},
@@ -2390,7 +2392,7 @@ func (g *GoliacRemoteImpl) UpdateTeamUpdateMember(ctx context.Context, errorColl
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s/memberships/%s", config.Config.GithubAppOrganization, teamslug, username),
+			fmt.Sprintf("/orgs/%s/teams/%s/memberships/%s", g.configGithubOrg, teamslug, username),
 			"",
 			"PUT",
 			map[string]interface{}{"role": role},
@@ -2455,7 +2457,7 @@ func (g *GoliacRemoteImpl) UpdateTeamRemoveMember(ctx context.Context, errorColl
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("orgs/%s/teams/%s/memberships/%s", config.Config.GithubAppOrganization, teamslug, username),
+			fmt.Sprintf("orgs/%s/teams/%s/memberships/%s", g.configGithubOrg, teamslug, username),
 			"",
 			"DELETE",
 			nil,
@@ -2500,7 +2502,7 @@ func (g *GoliacRemoteImpl) UpdateTeamSetParent(ctx context.Context, errorCollect
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s", config.Config.GithubAppOrganization, teamslug),
+			fmt.Sprintf("/orgs/%s/teams/%s", g.configGithubOrg, teamslug),
 			"",
 			"PATCH",
 			map[string]interface{}{"parent_team_id": parentTeam},
@@ -2519,7 +2521,7 @@ func (g *GoliacRemoteImpl) DeleteTeam(ctx context.Context, errorCollector *obser
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s", config.Config.GithubAppOrganization, teamslug),
+			fmt.Sprintf("/orgs/%s/teams/%s", g.configGithubOrg, teamslug),
 			"",
 			"DELETE",
 			nil,
@@ -2564,7 +2566,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 			// https://docs.github.com/en/rest/repos/forks?apiVersion=2022-11-28
 
 			props := map[string]interface{}{
-				"organization": config.Config.GithubAppOrganization,
+				"organization": g.configGithubOrg,
 				"name":         reponame,
 			}
 			body, err := g.client.CallRestAPI(
@@ -2603,7 +2605,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 
 			body, err := g.client.CallRestAPI(
 				ctx,
-				fmt.Sprintf("/orgs/%s/repos", config.Config.GithubAppOrganization),
+				fmt.Sprintf("/orgs/%s/repos", g.configGithubOrg),
 				"",
 				"POST",
 				props,
@@ -2648,7 +2650,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 		if !dryrun {
 			body, err := g.client.CallRestAPI(
 				ctx,
-				fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", config.Config.GithubAppOrganization, reader, config.Config.GithubAppOrganization, reponame),
+				fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", g.configGithubOrg, reader, g.configGithubOrg, reponame),
 				"",
 				"PUT",
 				map[string]interface{}{"permission": "pull"},
@@ -2675,7 +2677,7 @@ func (g *GoliacRemoteImpl) CreateRepository(ctx context.Context, errorCollector 
 		if !dryrun {
 			body, err := g.client.CallRestAPI(
 				ctx,
-				fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", config.Config.GithubAppOrganization, writer, config.Config.GithubAppOrganization, reponame),
+				fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", g.configGithubOrg, writer, g.configGithubOrg, reponame),
 				"",
 				"PUT",
 				map[string]interface{}{"permission": "push"},
@@ -2705,7 +2707,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryAddTeamAccess(ctx context.Context, er
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s/repos/%s/%s", config.Config.GithubAppOrganization, teamslug, config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("/orgs/%s/teams/%s/repos/%s/%s", g.configGithubOrg, teamslug, g.configGithubOrg, reponame),
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
@@ -2741,7 +2743,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryUpdateTeamAccess(ctx context.Context,
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/orgs/%s/teams/%s/repos/%s/%s", config.Config.GithubAppOrganization, teamslug, config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("/orgs/%s/teams/%s/repos/%s/%s", g.configGithubOrg, teamslug, g.configGithubOrg, reponame),
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
@@ -2777,7 +2779,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryRemoveTeamAccess(ctx context.Context,
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", config.Config.GithubAppOrganization, teamslug, config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("orgs/%s/teams/%s/repos/%s/%s", g.configGithubOrg, teamslug, g.configGithubOrg, reponame),
 			"",
 			"DELETE",
 			nil,
@@ -2811,7 +2813,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryUpdateProperty(ctx context.Context, e
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("repos/%s/%s", config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("repos/%s/%s", g.configGithubOrg, reponame),
 			"",
 			"PATCH",
 			map[string]interface{}{propertyName: propertyValue},
@@ -2842,7 +2844,7 @@ func (g *GoliacRemoteImpl) UpdateRepositorySetExternalUser(ctx context.Context, 
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("repos/%s/%s/collaborators/%s", config.Config.GithubAppOrganization, reponame, githubid),
+			fmt.Sprintf("repos/%s/%s/collaborators/%s", g.configGithubOrg, reponame, githubid),
 			"",
 			"PUT",
 			map[string]interface{}{"permission": permission},
@@ -2871,7 +2873,7 @@ func (g *GoliacRemoteImpl) updateRepositoryRemoveUser(ctx context.Context, error
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("repos/%s/%s/collaborators/%s", config.Config.GithubAppOrganization, reponame, githubid),
+			fmt.Sprintf("repos/%s/%s/collaborators/%s", g.configGithubOrg, reponame, githubid),
 			"",
 			"DELETE",
 			nil,
@@ -2905,7 +2907,7 @@ func (g *GoliacRemoteImpl) DeleteRepository(ctx context.Context, errorCollector 
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/repos/%s/%s", config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("/repos/%s/%s", g.configGithubOrg, reponame),
 			"",
 			"DELETE",
 			nil,
@@ -2933,7 +2935,7 @@ func (g *GoliacRemoteImpl) RenameRepository(ctx context.Context, errorCollector 
 	if !dryrun {
 		body, err := g.client.CallRestAPI(
 			ctx,
-			fmt.Sprintf("/repos/%s/%s", config.Config.GithubAppOrganization, reponame),
+			fmt.Sprintf("/repos/%s/%s", g.configGithubOrg, reponame),
 			"",
 			"PATCH",
 			map[string]interface{}{"name": newname},
