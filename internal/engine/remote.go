@@ -2939,6 +2939,12 @@ func (g *GoliacRemoteImpl) DeleteRepository(ctx context.Context, errorCollector 
 
 }
 func (g *GoliacRemoteImpl) RenameRepository(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, newname string) {
+	// check if the new name is already used
+	if _, ok := g.repositories[newname]; ok {
+		errorCollector.AddError(fmt.Errorf("failed to rename the repository %s (to %s): the new name is already used", reponame, newname))
+		return
+	}
+
 	// update repository
 	// https://docs.github.com/fr/rest/repos/repos?apiVersion=2022-11-28#update-a-repository
 	if !dryrun {

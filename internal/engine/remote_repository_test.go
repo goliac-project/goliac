@@ -36,7 +36,7 @@ func (m *CreateRepositoryMockClient) CallRestAPI(ctx context.Context, endpoint, 
 	m.lastBody = body
 
 	if m.shouldError {
-		return nil, fmt.Errorf(m.errorMessage)
+		return nil, fmt.Errorf("%s", m.errorMessage)
 	}
 
 	// Return a successful response
@@ -399,7 +399,7 @@ func (m *DeleteRepositoryMockClient) CallRestAPI(ctx context.Context, endpoint, 
 	m.lastMethod = method
 
 	if m.shouldError {
-		return []byte(m.errorMessage), fmt.Errorf(m.errorMessage)
+		return []byte(m.errorMessage), fmt.Errorf("%s", m.errorMessage)
 	}
 
 	return []byte("{}"), nil
@@ -585,5 +585,282 @@ func TestDeleteRepository(t *testing.T) {
 		// Verify the repository was removed from team references
 		assert.NotContains(t, remoteImpl.teamRepos["team1"], "test-repo")
 		assert.NotContains(t, remoteImpl.teamRepos["team2"], "test-repo")
+	})
+}
+
+// RenameRepositoryMockClient is a dedicated mock client for RenameRepository tests
+type RenameRepositoryMockClient struct {
+	// Track calls to verify test behavior
+	lastEndpoint string
+	lastMethod   string
+	lastBody     map[string]interface{}
+
+	// Configure mock responses
+	shouldError    bool
+	errorMessage   string
+	responseID     int
+	responseNodeID string
+	responseName   string
+}
+
+func (m *RenameRepositoryMockClient) QueryGraphQLAPI(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (m *RenameRepositoryMockClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
+	// Store the call details for verification
+	m.lastEndpoint = endpoint
+	m.lastMethod = method
+	m.lastBody = body
+
+	if m.shouldError {
+		return nil, fmt.Errorf("%s", m.errorMessage)
+	}
+
+	// Return a successful response
+	response := map[string]interface{}{
+		"id":      m.responseID,
+		"node_id": m.responseNodeID,
+		"name":    m.responseName,
+	}
+
+	jsonResponse, _ := json.Marshal(response)
+	return jsonResponse, nil
+}
+
+func (m *RenameRepositoryMockClient) GetAccessToken(ctx context.Context) (string, error) {
+	return "mock-token", nil
+}
+
+func (m *RenameRepositoryMockClient) CreateJWT() (string, error) {
+	return "mock-jwt", nil
+}
+
+func (m *RenameRepositoryMockClient) GetAppSlug() string {
+	return "mock-app"
+}
+
+func TestRenameRepository(t *testing.T) {
+	t.Run("happy path: rename existing repository", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &RenameRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		remoteImpl.Load(ctx, false)
+		errorCollector := observability.NewErrorCollection()
+
+		// Add a repository to the cache first
+		repo := &GithubRepository{
+			Name:   "old-name",
+			Id:     123,
+			RefId:  "R_123",
+			IsFork: false,
+			BoolProperties: map[string]bool{
+				"archived": false,
+			},
+		}
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"old-name": repo,
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": repo,
+		}
+
+		// Add team references
+		remoteImpl.teamRepos = map[string]map[string]*GithubTeamRepo{
+			"team1": {
+				"old-name": &GithubTeamRepo{
+					Name:       "old-name",
+					Permission: "WRITE",
+				},
+			},
+			"team2": {
+				"old-name": &GithubTeamRepo{
+					Name:       "old-name",
+					Permission: "READ",
+				},
+			},
+		}
+
+		// Rename the repository
+		remoteImpl.RenameRepository(
+			ctx,
+			errorCollector,
+			false, // dryrun
+			"old-name",
+			"new-name",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "/repos/myorg/old-name", mockClient.lastEndpoint)
+		assert.Equal(t, "PATCH", mockClient.lastMethod)
+		assert.Equal(t, map[string]interface{}{
+			"name": "new-name",
+		}, mockClient.lastBody)
+
+		// Verify the repository was renamed in the cache
+		assert.NotContains(t, remoteImpl.Repositories(ctx), "old-name")
+		assert.Contains(t, remoteImpl.Repositories(ctx), "new-name")
+
+		// Verify RefId mapping is updated
+		assert.Equal(t, "new-name", remoteImpl.repositoriesByRefId["R_123"].Name)
+
+		// Verify team references are updated
+		assert.NotContains(t, remoteImpl.teamRepos["team1"], "old-name")
+		assert.Contains(t, remoteImpl.teamRepos["team1"], "new-name")
+		assert.Equal(t, "WRITE", remoteImpl.teamRepos["team1"]["new-name"].Permission)
+
+		assert.NotContains(t, remoteImpl.teamRepos["team2"], "old-name")
+		assert.Contains(t, remoteImpl.teamRepos["team2"], "new-name")
+		assert.Equal(t, "READ", remoteImpl.teamRepos["team2"]["new-name"].Permission)
+	})
+
+	t.Run("error path: rename non-existent repository", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &RenameRepositoryMockClient{
+			shouldError:  true,
+			errorMessage: "repository not found",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		errorCollector := observability.NewErrorCollection()
+
+		// Try to rename a non-existent repository
+		remoteImpl.RenameRepository(
+			ctx,
+			errorCollector,
+			false,
+			"non-existent-repo",
+			"new-name",
+		)
+
+		// Verify error was collected
+		assert.True(t, errorCollector.HasErrors())
+		assert.Contains(t, errorCollector.Errors[0].Error(), "failed to rename the repository")
+		assert.Contains(t, errorCollector.Errors[0].Error(), "repository not found")
+
+		// Verify the API call was attempted
+		assert.Equal(t, "/repos/myorg/non-existent-repo", mockClient.lastEndpoint)
+		assert.Equal(t, "PATCH", mockClient.lastMethod)
+	})
+
+	t.Run("happy path: dry run", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &RenameRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		remoteImpl.Load(ctx, false)
+		mockClient.lastEndpoint = ""
+		mockClient.lastMethod = ""
+		errorCollector := observability.NewErrorCollection()
+
+		// Add a repository to the cache first
+		repo := &GithubRepository{
+			Name:   "old-name",
+			Id:     123,
+			RefId:  "R_123",
+			IsFork: false,
+			BoolProperties: map[string]bool{
+				"archived": false,
+			},
+		}
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"old-name": repo,
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": repo,
+		}
+
+		// Add team references
+		remoteImpl.teamRepos = map[string]map[string]*GithubTeamRepo{
+			"team1": {
+				"old-name": &GithubTeamRepo{
+					Name:       "old-name",
+					Permission: "WRITE",
+				},
+			},
+		}
+
+		// Rename the repository in dry run mode
+		remoteImpl.RenameRepository(
+			ctx,
+			errorCollector,
+			true, // dryrun
+			"old-name",
+			"new-name",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify no API call was made
+		assert.Empty(t, mockClient.lastEndpoint)
+		assert.Empty(t, mockClient.lastMethod)
+
+		// Verify the repository name remains unchanged in the cache
+		assert.Contains(t, remoteImpl.Repositories(ctx), "old-name")
+		assert.NotContains(t, remoteImpl.Repositories(ctx), "new-name")
+
+		// Verify team references remain unchanged
+		assert.Contains(t, remoteImpl.teamRepos["team1"], "old-name")
+		assert.NotContains(t, remoteImpl.teamRepos["team1"], "new-name")
+	})
+
+	t.Run("error path: rename to existing repository name", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &RenameRepositoryMockClient{
+			shouldError:  true,
+			errorMessage: "repository with this name already exists",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		remoteImpl.Load(ctx, false)
+		mockClient.lastEndpoint = ""
+		mockClient.lastMethod = ""
+		errorCollector := observability.NewErrorCollection()
+
+		// Add two repositories to the cache
+		repo1 := &GithubRepository{
+			Name:   "old-name",
+			Id:     123,
+			RefId:  "R_123",
+			IsFork: false,
+		}
+		repo2 := &GithubRepository{
+			Name:   "existing-name",
+			Id:     456,
+			RefId:  "R_456",
+			IsFork: false,
+		}
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"old-name":      repo1,
+			"existing-name": repo2,
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": repo1,
+			"R_456": repo2,
+		}
+
+		// Try to rename to an existing name
+		remoteImpl.RenameRepository(
+			ctx,
+			errorCollector,
+			false,
+			"old-name",
+			"existing-name",
+		)
+
+		// Verify error was collected
+		assert.True(t, errorCollector.HasErrors())
+		assert.Contains(t, errorCollector.Errors[0].Error(), "failed to rename the repository")
+		assert.Contains(t, errorCollector.Errors[0].Error(), "the new name is already used")
+
 	})
 }

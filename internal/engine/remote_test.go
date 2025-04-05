@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goliac-project/goliac/internal/config"
 	"github.com/goliac-project/goliac/internal/github"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -398,10 +397,10 @@ func (m *MockGithubClient) QueryGraphQLAPI(ctx context.Context, query string, va
 }
 
 func (m *MockGithubClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
-	// /repos/"+config.Config.GithubAppOrganization+"/"+repository+"/teams
-	if strings.HasPrefix(endpoint, "/repos/"+config.Config.GithubAppOrganization+"/repo_") {
+	// /repos/myorg/"+repository+"/teams
+	if strings.HasPrefix(endpoint, "/repos/myorg/repo_") {
 		// we still pretend we have 133 teams, cf L263
-		repoSuffix := strings.TrimPrefix(endpoint, "/repos/"+config.Config.GithubAppOrganization+"/repo_")
+		repoSuffix := strings.TrimPrefix(endpoint, "/repos/myorg/repo_")
 		repoIdStr := strings.Split(repoSuffix, "/")[0]
 		repoId, err := strconv.Atoi(repoIdStr)
 		if err != nil {
