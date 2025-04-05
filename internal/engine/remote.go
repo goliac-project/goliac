@@ -2922,6 +2922,15 @@ func (g *GoliacRemoteImpl) DeleteRepository(ctx context.Context, errorCollector 
 	g.actionMutex.Lock()
 	defer g.actionMutex.Unlock()
 
+	// update the teams repositories list
+	for _, tr := range g.teamRepos {
+		for rname := range tr {
+			if rname == reponame {
+				delete(tr, rname)
+			}
+		}
+	}
+
 	// update the repositories list
 	if r, ok := g.repositories[reponame]; ok {
 		delete(g.repositoriesByRefId, r.RefId)

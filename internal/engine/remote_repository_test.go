@@ -377,3 +377,213 @@ func TestCreateRepository(t *testing.T) {
 		assert.Contains(t, repos, "dry-run-repo")
 	})
 }
+
+// DeleteRepositoryMockClient is a dedicated mock client for DeleteRepository tests
+type DeleteRepositoryMockClient struct {
+	// Track calls to verify test behavior
+	lastEndpoint string
+	lastMethod   string
+
+	// Configure mock responses
+	shouldError  bool
+	errorMessage string
+}
+
+func (m *DeleteRepositoryMockClient) QueryGraphQLAPI(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (m *DeleteRepositoryMockClient) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
+	// Store the call details for verification
+	m.lastEndpoint = endpoint
+	m.lastMethod = method
+
+	if m.shouldError {
+		return []byte(m.errorMessage), fmt.Errorf(m.errorMessage)
+	}
+
+	return []byte("{}"), nil
+}
+
+func (m *DeleteRepositoryMockClient) GetAccessToken(ctx context.Context) (string, error) {
+	return "mock-token", nil
+}
+
+func (m *DeleteRepositoryMockClient) CreateJWT() (string, error) {
+	return "mock-jwt", nil
+}
+
+func (m *DeleteRepositoryMockClient) GetAppSlug() string {
+	return "mock-app"
+}
+
+func TestDeleteRepository(t *testing.T) {
+	t.Run("happy path: delete existing repository", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &DeleteRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		errorCollector := observability.NewErrorCollection()
+
+		// Add a repository to the cache first
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"test-repo": {
+				Name:   "test-repo",
+				Id:     123,
+				RefId:  "R_123",
+				IsFork: false,
+			},
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": remoteImpl.repositories["test-repo"],
+		}
+
+		// Delete the repository
+		remoteImpl.DeleteRepository(
+			ctx,
+			errorCollector,
+			false, // dryrun
+			"test-repo",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "/repos/myorg/test-repo", mockClient.lastEndpoint)
+		assert.Equal(t, "DELETE", mockClient.lastMethod)
+
+		// Verify the repository was removed from the cache
+		assert.NotContains(t, remoteImpl.Repositories(ctx), "test-repo")
+		assert.NotContains(t, remoteImpl.repositoriesByRefId, "R_123")
+	})
+
+	t.Run("error path: delete non-existent repository", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &DeleteRepositoryMockClient{
+			shouldError:  true,
+			errorMessage: "repository not found",
+		}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		errorCollector := observability.NewErrorCollection()
+
+		// Try to delete a non-existent repository
+		remoteImpl.DeleteRepository(
+			ctx,
+			errorCollector,
+			false,
+			"non-existent-repo",
+		)
+
+		// Verify error was collected
+		assert.True(t, errorCollector.HasErrors())
+		assert.Contains(t, errorCollector.Errors[0].Error(), "failed to delete repository")
+		assert.Contains(t, errorCollector.Errors[0].Error(), "repository not found")
+
+		// Verify the API call was attempted
+		assert.Equal(t, "/repos/myorg/non-existent-repo", mockClient.lastEndpoint)
+		assert.Equal(t, "DELETE", mockClient.lastMethod)
+	})
+
+	t.Run("happy path: dry run", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &DeleteRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		remoteImpl.Load(ctx, false)
+		mockClient.lastEndpoint = ""
+		mockClient.lastMethod = ""
+		errorCollector := observability.NewErrorCollection()
+
+		// Add a repository to the cache first
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"test-repo": {
+				Name:   "test-repo",
+				Id:     123,
+				RefId:  "R_123",
+				IsFork: false,
+			},
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": remoteImpl.repositories["test-repo"],
+		}
+
+		// Delete the repository in dry run mode
+		remoteImpl.DeleteRepository(
+			ctx,
+			errorCollector,
+			true, // dryrun
+			"test-repo",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify no API call was made
+		assert.Empty(t, mockClient.lastEndpoint)
+		assert.Empty(t, mockClient.lastMethod)
+	})
+
+	t.Run("happy path: delete repository with team references", func(t *testing.T) {
+		// Setup mock client
+		mockClient := &DeleteRepositoryMockClient{}
+
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg")
+		ctx := context.TODO()
+		errorCollector := observability.NewErrorCollection()
+
+		// Add a repository to the cache with team references
+		remoteImpl.repositories = map[string]*GithubRepository{
+			"test-repo": {
+				Name:   "test-repo",
+				Id:     123,
+				RefId:  "R_123",
+				IsFork: false,
+			},
+		}
+		remoteImpl.repositoriesByRefId = map[string]*GithubRepository{
+			"R_123": remoteImpl.repositories["test-repo"],
+		}
+		remoteImpl.teamRepos = map[string]map[string]*GithubTeamRepo{
+			"team1": {
+				"test-repo": &GithubTeamRepo{
+					Name:       "test-repo",
+					Permission: "WRITE",
+				},
+			},
+			"team2": {
+				"test-repo": &GithubTeamRepo{
+					Name:       "test-repo",
+					Permission: "READ",
+				},
+			},
+		}
+
+		// Delete the repository
+		remoteImpl.DeleteRepository(
+			ctx,
+			errorCollector,
+			false,
+			"test-repo",
+		)
+
+		// Verify no errors occurred
+		assert.False(t, errorCollector.HasErrors())
+
+		// Verify the API call was made correctly
+		assert.Equal(t, "/repos/myorg/test-repo", mockClient.lastEndpoint)
+		assert.Equal(t, "DELETE", mockClient.lastMethod)
+
+		// Verify the repository was removed from the cache
+		assert.NotContains(t, remoteImpl.Repositories(ctx), "test-repo")
+		assert.NotContains(t, remoteImpl.repositoriesByRefId, "R_123")
+
+		// Verify the repository was removed from team references
+		assert.NotContains(t, remoteImpl.teamRepos["team1"], "test-repo")
+		assert.NotContains(t, remoteImpl.teamRepos["team2"], "test-repo")
+	})
+}
