@@ -60,17 +60,20 @@ type GoliacRemoteExecutor interface {
 }
 
 type GithubRepository struct {
-	Name              string
-	Id                int
-	RefId             string
-	Visibility        string                             // public, internal, private
-	BoolProperties    map[string]bool                    // archived, allow_auto_merge, delete_branch_on_merge, allow_update_branch
-	ExternalUsers     map[string]string                  // [githubid]permission
-	InternalUsers     map[string]string                  // [githubid]permission
-	RuleSets          map[string]*GithubRuleSet          // [name]ruleset
-	BranchProtections map[string]*GithubBranchProtection // [pattern]branch protection
-	DefaultBranchName string
-	IsFork            bool
+	Name                 string
+	Id                   int
+	RefId                string
+	Visibility           string                             // public, internal, private
+	BoolProperties       map[string]bool                    // archived, allow_auto_merge, delete_branch_on_merge, allow_update_branch
+	ExternalUsers        map[string]string                  // [githubid]permission
+	InternalUsers        map[string]string                  // [githubid]permission
+	RuleSets             map[string]*GithubRuleSet          // [name]ruleset
+	BranchProtections    map[string]*GithubBranchProtection // [pattern]branch protection
+	DefaultBranchName    string
+	IsFork               bool
+	Environments         map[string]*GithubEnvironment         // [name]environment
+	EnvironmentVariables map[string]map[string]*GithubVariable // [name][environment]variable
+	RepositoryVariables  map[string]*GithubVariable            // [name]variable
 }
 
 type GithubTeam struct {
@@ -85,6 +88,36 @@ type GithubTeam struct {
 type GithubTeamRepo struct {
 	Name       string // repository name
 	Permission string // possible values: ADMIN, MAINTAIN, WRITE, TRIAGE, READ
+}
+
+// GithubEnvironment represents a GitHub environment
+type GithubEnvironment struct {
+	Id              int    `json:"id"`
+	Name            string `json:"name"`
+	NodeId          string `json:"node_id"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+	ProtectionRules []struct {
+		Id                int      `json:"id"`
+		NodeId            string   `json:"node_id"`
+		Type              string   `json:"type"`
+		ReviewerTeams     []string `json:"reviewer_teams,omitempty"`
+		ReviewerUsers     []string `json:"reviewer_users,omitempty"`
+		WaitTimer         int      `json:"wait_timer,omitempty"`
+		PreventSelfReview bool     `json:"prevent_self_review,omitempty"`
+	} `json:"protection_rules"`
+	DeploymentBranchPolicy struct {
+		ProtectedBranches    bool     `json:"protected_branches"`
+		CustomBranchPolicies bool     `json:"custom_branch_policies"`
+		AllowedBranches      []string `json:"allowed_branches,omitempty"`
+	} `json:"deployment_branch_policy"`
+}
+
+type GithubVariable struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type GoliacRemoteImpl struct {
@@ -197,7 +230,7 @@ func (g *GoliacRemoteImpl) CountAssets(ctx context.Context) (int, error) {
 	if len(gResult.Errors) > 0 {
 		return 0, fmt.Errorf("graphql error on CountAssets: %v (%v)", gResult.Errors[0].Message, gResult.Errors[0].Path)
 	}
-	return 2*gResult.Data.Organization.Repositories.TotalCount + // we multiply by 2 because we have the repositories, and the teams per repostiory to fetch
+	return 5*gResult.Data.Organization.Repositories.TotalCount + // we multiply by 5 because we have the repositories, the teams per repostiory to fetch, the environments per repository, the variables per environment per repository, and the variables per repository to fetch
 		2*gResult.Data.Organization.Teams.TotalCount + // we multiply by 2 because we have the teams and the members per team to fetch
 		gResult.Data.Organization.MembersWithRole.TotalCount +
 		gResult.Data.Organization.SamlIdentityProvider.ExternalIdentities.TotalCount, nil
@@ -404,6 +437,26 @@ func (g *GoliacRemoteImpl) Repositories(ctx context.Context) map[string]*GithubR
 			g.repositoriesByRefId = repositoriesByRefIds
 			g.ttlExpireRepositories = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
 		}
+		envPerRepo, err := g.loadEnvironments(ctx, config.Config.GithubConcurrentThreads, repositories)
+		if err == nil {
+			for repo, envs := range envPerRepo {
+				repositories[repo].Environments = envs
+			}
+
+			envVarsPerRepo, err := g.loadEnvironmentVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
+			if err == nil {
+				for repo, envvars := range envVarsPerRepo {
+					repositories[repo].EnvironmentVariables = envvars
+				}
+			}
+		}
+
+		varsPerRepo, err := g.loadRepositoriesVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
+		if err == nil {
+			for repo, vars := range varsPerRepo {
+				repositories[repo].RepositoryVariables = vars
+			}
+		}
 	}
 
 	g.actionMutex.Lock()
@@ -419,7 +472,8 @@ func (g *GoliacRemoteImpl) Repositories(ctx context.Context) map[string]*GithubR
 
 func (g *GoliacRemoteImpl) TeamRepositories(ctx context.Context) map[string]map[string]*GithubTeamRepo {
 	if time.Now().After(g.ttlExpireTeamsRepos) {
-		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
+		repositories := g.Repositories(ctx)
+		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads, repositories)
 		if err == nil {
 			g.teamRepos = teamsrepos
 			g.ttlExpireTeamsRepos = time.Now().Add(time.Duration(config.Config.GithubCacheTTL) * time.Second)
@@ -801,6 +855,30 @@ func (g *GoliacRemoteImpl) loadRepositories(ctx context.Context) (map[string]*Gi
 		}
 	}
 
+	envPerRepo, err := g.loadEnvironments(ctx, config.Config.GithubConcurrentThreads, repositories)
+	if err != nil {
+		return repositories, repositoriesByRefId, err
+	}
+	for repo, envs := range envPerRepo {
+		repositories[repo].Environments = envs
+	}
+
+	envVarsPerRepo, err := g.loadEnvironmentVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
+	if err != nil {
+		return repositories, repositoriesByRefId, err
+	}
+	for repo, envvars := range envVarsPerRepo {
+		repositories[repo].EnvironmentVariables = envvars
+	}
+
+	varsPerRepo, err := g.loadRepositoriesVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
+	if err != nil {
+		return repositories, repositoriesByRefId, err
+	}
+	for repo, vars := range varsPerRepo {
+		repositories[repo].RepositoryVariables = vars
+	}
+
 	return repositories, repositoriesByRefId, retErr
 }
 
@@ -1003,7 +1081,7 @@ func (g *GoliacRemoteImpl) Load(ctx context.Context, continueOnError bool) error
 	}
 
 	if time.Now().After(g.ttlExpireTeamsRepos) {
-		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads)
+		teamsrepos, err := g.loadTeamReposConcurrently(ctx, config.Config.GithubConcurrentThreads, g.repositories)
 		if err != nil {
 			if !continueOnError {
 				return err
@@ -1022,96 +1100,32 @@ func (g *GoliacRemoteImpl) Load(ctx context.Context, continueOnError bool) error
 	return retErr
 }
 
-func (g *GoliacRemoteImpl) loadTeamReposConcurrently(ctx context.Context, maxGoroutines int64) (map[string]map[string]*GithubTeamRepo, error) {
+func (g *GoliacRemoteImpl) loadTeamReposConcurrently(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubTeamRepo, error) {
 	var childSpan trace.Span
 	if config.Config.OpenTelemetryEnabled {
 		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadTeamReposConcurrently")
 		defer childSpan.End()
 	}
 	logrus.Debug("loading teamReposConcurrently")
-	teamRepos := make(map[string]map[string]*GithubTeamRepo)
 
-	teamsPerRepo := make(map[string]map[string]*GithubTeamRepo)
-
-	var wg sync.WaitGroup
-	var wg2 sync.WaitGroup
-
-	// Create buffered channels
-	reposChan := make(chan string, len(g.repositories))
-	errChan := make(chan error, 1) // will hold the first error
-	teamReposChan := make(chan struct {
-		repoName string
-		repos    map[string]*GithubTeamRepo
-	}, len(g.repositories))
-
-	if maxGoroutines < 1 {
-		maxGoroutines = 1
+	resourcePerRepo, err := concurrentCall[*GithubTeamRepo](ctx, maxGoroutines, repositories, "teams_repos", g.loadTeamRepos, g.feedback)
+	if err != nil {
+		return nil, err
 	}
-	// Create worker goroutines
-	for i := int64(0); i < maxGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for repoName := range reposChan {
-				repos, err := g.loadTeamRepos(ctx, repoName)
-				if err != nil {
-					// Try to report the error
-					select {
-					case errChan <- err:
-					default:
-					}
-					return
-				}
-				teamReposChan <- struct {
-					repoName string
-					repos    map[string]*GithubTeamRepo
-				}{repoName, repos}
-			}
-		}()
-	}
+	resourceRepos := make(map[string]map[string]*GithubTeamRepo)
 
-	// Send repositories to reposChan
-	for repoName := range g.repositories {
-		reposChan <- repoName
-	}
-	close(reposChan)
-
-	wg2.Add(1)
-	go func() {
-		defer wg2.Done()
-		for r := range teamReposChan {
-			if g.feedback != nil {
-				g.feedback.LoadingAsset("teams_repos", 1)
-			}
-			teamsPerRepo[r.repoName] = r.repos
-		}
-	}()
-
-	// Wait for all goroutines to finish
-	wg.Wait()
-	close(teamReposChan)
-	wg2.Wait()
-
-	// Check if any goroutine returned an error
-	select {
-	case err := <-errChan:
-		return teamRepos, err
-	default:
-		//nop
-	}
-
-	// we have all the teams per repo, now we need to invert the map
-	for repository, repos := range teamsPerRepo {
+	// we have all the resources per repo, now we need to invert the map
+	for repository, repos := range resourcePerRepo {
 		for team, repo := range repos {
-			if _, ok := teamRepos[team]; ok {
-				teamRepos[team][repository] = repo
+			if _, ok := resourceRepos[team]; ok {
+				resourceRepos[team][repository] = repo
 			} else {
-				teamRepos[team] = map[string]*GithubTeamRepo{repository: repo}
+				resourceRepos[team] = map[string]*GithubTeamRepo{repository: repo}
 			}
 		}
 	}
 
-	return teamRepos, nil
+	return resourceRepos, nil
 }
 
 type TeamsRepoResponse struct {
@@ -1124,7 +1138,7 @@ type TeamsRepoResponse struct {
 loadTeamRepos returns
 map[teamSlug]repoinfo
 */
-func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string) (map[string]*GithubTeamRepo, error) {
+func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository *GithubRepository) (map[string]*GithubTeamRepo, error) {
 	// https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#list-repository-teams
 	teamsrepo := make(map[string]*GithubTeamRepo)
 
@@ -1134,18 +1148,18 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string)
 	for page == 1 || len(teams) == 30 {
 		data, err := g.client.CallRestAPI(
 			ctx,
-			"/repos/"+g.configGithubOrg+"/"+repository+"/teams",
+			"/repos/"+g.configGithubOrg+"/"+repository.Name+"/teams",
 			fmt.Sprintf("page=%d&per_page=30", page),
 			"GET",
 			nil,
 			nil)
 		if err != nil {
-			return nil, fmt.Errorf("not able to list teams for repo %s: %v", repository, err)
+			return nil, fmt.Errorf("not able to list teams for repo %s: %v", repository.Name, err)
 		}
 
 		err = json.Unmarshal(data, &teams)
 		if err != nil {
-			return nil, fmt.Errorf("not able to unmarshall teams for repo %s: %v", repository, err)
+			return nil, fmt.Errorf("not able to unmarshall teams for repo %s: %v", repository.Name, err)
 		}
 
 		for _, t := range teams {
@@ -1159,7 +1173,7 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string)
 				permission = "READ"
 			}
 			teamsrepo[t.Slug] = &GithubTeamRepo{
-				Name:       repository,
+				Name:       repository.Name,
 				Permission: permission,
 			}
 		}
@@ -1173,6 +1187,153 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository string)
 	}
 
 	return teamsrepo, nil
+}
+
+func (g *GoliacRemoteImpl) loadEnvironments(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubEnvironment, error) {
+	var childSpan trace.Span
+	if config.Config.OpenTelemetryEnabled {
+		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentsRepositories")
+		defer childSpan.End()
+	}
+	logrus.Debug("loading environmentsRepositories")
+
+	return concurrentCall(ctx, maxGoroutines, repositories, "environments_repos", g.loadEnvironmentsPerRepository, g.feedback)
+}
+
+type EnvironmentsResponse struct {
+	TotalCount   int                  `json:"total_count"`
+	Environments []*GithubEnvironment `json:"environments"`
+}
+
+func (g *GoliacRemoteImpl) loadEnvironmentsPerRepository(ctx context.Context, repository *GithubRepository) (map[string]*GithubEnvironment, error) {
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/deployments/environments?apiVersion=2022-11-28#list-environments
+	envs := make(map[string]*GithubEnvironment)
+	respenvs := EnvironmentsResponse{}
+
+	page := 1
+	for page == 1 || len(respenvs.Environments) == 30 {
+		data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/environments", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("not able to list environments for repo %s: %v", repository.Name, err)
+		}
+
+		err = json.Unmarshal(data, &respenvs)
+		if err != nil {
+			return nil, fmt.Errorf("not able to unmarshall environments for repo %s: %v", repository.Name, err)
+		}
+
+		for _, e := range respenvs.Environments {
+			envs[e.Name] = e
+		}
+
+		page++
+
+		// sanity check to avoid loops
+		if page > FORLOOP_STOP {
+			break
+		}
+	}
+
+	return envs, nil
+}
+
+func (g *GoliacRemoteImpl) loadRepositoriesVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubVariable, error) {
+	var childSpan trace.Span
+	if config.Config.OpenTelemetryEnabled {
+		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadVariablesRepositories")
+		defer childSpan.End()
+	}
+	logrus.Debug("loading variablesRepositories")
+
+	return concurrentCall(ctx, maxGoroutines, repositories, "action_variables_repos", g.loadVariablesPerRepository, g.feedback)
+}
+
+type VariablesResponse struct {
+	TotalCount int               `json:"total_count"`
+	Variables  []*GithubVariable `json:"variables"`
+}
+
+func (g *GoliacRemoteImpl) loadVariablesPerRepository(ctx context.Context, repository *GithubRepository) (map[string]*GithubVariable, error) {
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/actions/variables?apiVersion=2022-11-28#list-repository-variables
+	variables := make(map[string]*GithubVariable)
+	respenvs := VariablesResponse{}
+
+	page := 1
+	for page == 1 || len(respenvs.Variables) == 30 {
+		data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/actions/variables", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("not able to list action variables for repo %s: %v", repository.Name, err)
+		}
+
+		err = json.Unmarshal(data, &respenvs)
+		if err != nil {
+			return nil, fmt.Errorf("not able to unmarshall action variables for repo %s: %v", repository.Name, err)
+		}
+
+		for _, e := range respenvs.Variables {
+			variables[e.Name] = e
+		}
+
+		page++
+
+		// sanity check to avoid loops
+		if page > FORLOOP_STOP {
+			break
+		}
+	}
+
+	return variables, nil
+}
+
+func (g *GoliacRemoteImpl) loadEnvironmentVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]map[string]*GithubVariable, error) {
+	var childSpan trace.Span
+	if config.Config.OpenTelemetryEnabled {
+		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentVariables")
+		defer childSpan.End()
+	}
+	logrus.Debug("loading environmentVariables")
+
+	return concurrentCall(ctx, maxGoroutines, repositories, "environment_variables_repos", g.loadEnvironmentVariablesPerRepository, g.feedback)
+}
+
+type EnvironmentsVariablesResponse struct {
+	TotalCount int               `json:"total_count"`
+	Variables  []*GithubVariable `json:"variables"`
+}
+
+func (g *GoliacRemoteImpl) loadEnvironmentVariablesPerRepository(ctx context.Context, repository *GithubRepository) (map[string]map[string]*GithubVariable, error) {
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/actions/variables?apiVersion=2022-11-28#list-environment-variables
+	envvars := make(map[string]map[string]*GithubVariable)
+	respenvs := EnvironmentsVariablesResponse{}
+
+	for _, environment := range repository.Environments {
+		envvars[environment.Name] = make(map[string]*GithubVariable)
+		page := 1
+		for page == 1 || len(respenvs.Variables) == 30 {
+			data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/environments/"+environment.Name+"/variables", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
+			if err != nil {
+				return nil, fmt.Errorf("not able to list environments for repo %s: %v", repository.Name, err)
+			}
+
+			err = json.Unmarshal(data, &respenvs)
+			if err != nil {
+				return nil, fmt.Errorf("not able to unmarshall environments for repo %s: %v", repository.Name, err)
+			}
+
+			for _, e := range respenvs.Variables {
+				envvars[environment.Name][e.Name] = e
+			}
+
+			page++
+
+			// sanity check to avoid loops
+			if page > FORLOOP_STOP {
+				break
+			}
+		}
+	}
+
+	return envvars, nil
 }
 
 const listAllTeamMembersInOrg = `

@@ -476,7 +476,12 @@ func TestRemoteRepository(t *testing.T) {
 		remoteImpl := NewGoliacRemoteImpl(&client, "myorg")
 
 		ctx := context.TODO()
-		repos, err := remoteImpl.loadTeamRepos(ctx, "repo_0")
+		repo_0 := &GithubRepository{
+			Name: "repo_0",
+			Id:   1,
+		}
+
+		repos, err := remoteImpl.loadTeamRepos(ctx, repo_0)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, len(repos))
 		assert.Equal(t, "WRITE", repos["slug-0"].Permission)

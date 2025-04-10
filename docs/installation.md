@@ -24,6 +24,9 @@ In GitHub:
 - Under Organization permissions
   - Give Read/Write access to `Administration`
   - Give Read/Write access to `Members`
+  - Give Read/Write access to `Environments`
+  - Give Read/Write access to `Actions`
+  - Give Read/Write access to `Variables`
 - Under Repository permissions
   - Give Read/Write access to `Administration`
   - Give Read/Write access to `Content` (it is needed to access the default branch of repositories)

@@ -19,6 +19,7 @@ type MutableGoliacRemoteImpl struct {
 	teamSlugByName map[string]string
 	rulesets       map[string]*GithubRuleSet
 	appIds         map[string]int
+	remote         GoliacRemote
 }
 
 func NewMutableGoliacRemoteImpl(ctx context.Context, remote GoliacRemote) *MutableGoliacRemoteImpl {
@@ -70,6 +71,7 @@ func NewMutableGoliacRemoteImpl(ctx context.Context, remote GoliacRemote) *Mutab
 		teamSlugByName: rTeamSlugByName,
 		rulesets:       rulesets,
 		appIds:         appids,
+		remote:         remote,
 	}
 }
 
