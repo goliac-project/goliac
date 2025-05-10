@@ -472,7 +472,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 	for t, repos := range remote.TeamRepositories() {
 		for r, p := range repos {
 			if rr, ok := rRepos[r]; ok {
-				if p.Permission == "ADMIN" || p.Permission == "WRITE" {
+				if p.Permission == "WRITE" {
 					rr.Writers = append(rr.Writers, t)
 				} else {
 					rr.Readers = append(rr.Readers, t)

@@ -1302,7 +1302,7 @@ func TestReconciliationRepo(t *testing.T) {
 		assert.False(t, errorCollector.HasErrors())
 		assert.Equal(t, 0, len(recorder.RepositoryCreated))
 		assert.Equal(t, 0, len(recorder.RepositoriesDeleted))
-		assert.Equal(t, 0, len(recorder.RepositoryTeamRemoved)) // ADMIN -> WRITE
+		assert.Equal(t, 1, len(recorder.RepositoryTeamRemoved)) // ADMIN -> WRITE
 		assert.Equal(t, 2, len(recorder.RepositoryTeamAdded))
 		assert.Equal(t, 0, len(recorder.RepositoryTeamUpdated))
 	})
