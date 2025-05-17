@@ -57,7 +57,7 @@ func (s *ScaffoldGoliacRemoteMock) AppIds(ctx context.Context) map[string]int {
 func (s *ScaffoldGoliacRemoteMock) IsEnterprise() bool {
 	return true
 }
-func (m *ScaffoldGoliacRemoteMock) CountAssets(ctx context.Context) (int, error) {
+func (m *ScaffoldGoliacRemoteMock) CountAssets(ctx context.Context, warmup bool) (int, error) {
 	return 2*len(m.repos) + len(m.teams) + len(m.users), nil
 }
 func (g *ScaffoldGoliacRemoteMock) SetRemoteObservability(feedback observability.RemoteObservability) {
@@ -99,18 +99,24 @@ func NewScaffoldGoliacRemoteMock() engine.GoliacRemote {
 	teams["regular"] = &regular
 
 	repo1 := engine.GithubRepository{
-		Name: "repo1",
+		Name:                "repo1",
+		Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+		RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 	}
 	repos["repo1"] = &repo1
 
 	repo2 := engine.GithubRepository{
-		Name: "repo2",
+		Name:                "repo2",
+		Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+		RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 	}
 	repos["repo2"] = &repo2
 
 	archivedRepo := engine.GithubRepository{
-		Name:           "archived_repo",
-		BoolProperties: map[string]bool{"archived": true},
+		Name:                "archived_repo",
+		Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+		RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
+		BoolProperties:      map[string]bool{"archived": true},
 	}
 	repos["archived_repo"] = &archivedRepo
 
@@ -174,12 +180,16 @@ func NewScaffoldGoliacRemoteMockWithMaintainers() engine.GoliacRemote {
 	teams["regular"] = &regular
 
 	repo1 := engine.GithubRepository{
-		Name: "repo1",
+		Name:                "repo1",
+		Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+		RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 	}
 	repos["repo1"] = &repo1
 
 	repo2 := engine.GithubRepository{
-		Name: "repo2",
+		Name:                "repo2",
+		Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+		RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 	}
 	repos["repo2"] = &repo2
 
@@ -334,6 +344,18 @@ func TestScaffoldUnit(t *testing.T) {
 	})
 }
 
+type MockMappedEntityLazyLoader[T any] struct {
+	entity map[string]T
+}
+
+func (m *MockMappedEntityLazyLoader[T]) GetEntity() map[string]T {
+	return m.entity
+}
+
+func NewMockMappedEntityLazyLoader[T any](entity map[string]T) *MockMappedEntityLazyLoader[T] {
+	return &MockMappedEntityLazyLoader[T]{entity: entity}
+}
+
 func TestEnvironmentsAndVariables(t *testing.T) {
 	t.Run("happy path: test environments and variables", func(t *testing.T) {
 
@@ -364,30 +386,32 @@ func TestEnvironmentsAndVariables(t *testing.T) {
 		teams["regular"] = &regular
 
 		repo1 := engine.GithubRepository{
-			Name: "repo1",
+			Name:                "repo1",
+			Environments:        NewMockMappedEntityLazyLoader(map[string]*engine.GithubEnvironment{}),
+			RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 		}
 		repos["repo1"] = &repo1
 
 		repo2 := engine.GithubRepository{
 			Name: "repo2",
 		}
-		repo2.Environments = map[string]*engine.GithubEnvironment{
+		repo2.Environments = NewMockMappedEntityLazyLoader[*engine.GithubEnvironment](map[string]*engine.GithubEnvironment{
 			"env1": {
 				Name: "env1",
 			},
 			"env2": {
 				Name: "env2",
 			},
-		}
-		repo2.Environments["env1"].Variables = map[string]string{
+		})
+		repo2.Environments.GetEntity()["env1"].Variables = map[string]string{
 			"var1": "value1",
 		}
-		repo2.Environments["env2"].Variables = map[string]string{
+		repo2.Environments.GetEntity()["env2"].Variables = map[string]string{
 			"var2": "value2",
 		}
-		repo2.RepositoryVariables = map[string]string{
+		repo2.RepositoryVariables = NewMockMappedEntityLazyLoader[string](map[string]string{
 			"var2": "value2",
-		}
+		})
 
 		repos["repo2"] = &repo2
 

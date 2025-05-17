@@ -390,8 +390,8 @@ type GithubRepoComparable struct {
 	Rulesets            map[string]*GithubRuleSet
 	BranchProtections   map[string]*GithubBranchProtection
 	DefaultBranchName   string
-	ActionVariables     map[string]string
-	Environments        map[string]*GithubEnvironment
+	ActionVariables     MappedEntityLazyLoader[string]
+	Environments        MappedEntityLazyLoader[*GithubEnvironment]
 }
 
 type GithubEnvironment struct {
@@ -621,8 +621,8 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			Rulesets:            rulesets,
 			BranchProtections:   branchprotections,
 			DefaultBranchName:   lRepo.Spec.DefaultBranchName,
-			Environments:        environments,
-			ActionVariables:     lRepo.Spec.ActionsVariables,
+			Environments:        NewLocalLazyLoader(environments),
+			ActionVariables:     NewLocalLazyLoader(lRepo.Spec.ActionsVariables),
 		})
 	}
 
@@ -632,7 +632,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 		archived := lRepo.BoolProperties["archived"]
 		if !archived {
 			//
-			// "recursive" rulesets comparison
+			// "nested" rulesets comparison
 			//
 			onRulesetAdded := func(rulename string, lRuleset *GithubRuleSet, rRuleset *GithubRuleSet) {
 				// CREATE repo ruleset
@@ -650,7 +650,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			CompareEntities(lRepo.Rulesets, rRepo.Rulesets, compareRulesets, onRulesetAdded, onRulesetRemoved, onRulesetChange)
 
 			//
-			// "recursive" branchprotections comparison
+			// "nested" branchprotections comparison
 			//
 			onBranchProtectionAdded := func(rulename string, lBp *GithubBranchProtection, rBp *GithubBranchProtection) {
 				// CREATE repo branchprotection
@@ -669,7 +669,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 
 			if manageGithubVariables {
 				//
-				// "recursive" environments comparison
+				// "nested" environments comparison
 				//
 				onEnvironmentAdded := func(environment string, lEnv *GithubEnvironment, rEnv *GithubEnvironment) {
 					// CREATE repo environment
@@ -698,7 +698,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 					// DELETE repo environment
 					r.DeleteRepositoryEnvironment(ctx, errorCollector, dryrun, remote, reponame, environment)
 				}
-				CompareEntities(lRepo.Environments, rRepo.Environments, compareEnvironments, onEnvironmentAdded, onEnvironmentRemoved, onEnvironmentChange)
+				CompareEntities(lRepo.Environments.GetEntity(), rRepo.Environments.GetEntity(), compareEnvironments, onEnvironmentAdded, onEnvironmentRemoved, onEnvironmentChange)
 			}
 		}
 
@@ -748,8 +748,10 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 		}
 
 		if manageGithubVariables {
-			if !utils.DeepEqualUnordered(lRepo.ActionVariables, rRepo.ActionVariables) {
-				return false
+			if !archived {
+				if !utils.DeepEqualUnordered(lRepo.ActionVariables.GetEntity(), rRepo.ActionVariables.GetEntity()) {
+					return false
+				}
 			}
 		}
 
@@ -844,21 +846,24 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 		}
 
 		if manageGithubVariables {
-			if !utils.DeepEqualUnordered(lRepo.ActionVariables, rRepo.ActionVariables) {
+			archived := lRepo.BoolProperties["archived"]
+			if !archived {
+				if !utils.DeepEqualUnordered(lRepo.ActionVariables.GetEntity(), rRepo.ActionVariables.GetEntity()) {
 
-				// Check for removed or changed keys
-				for name, value := range lRepo.ActionVariables {
-					if rValue, ok := rRepo.ActionVariables[name]; !ok {
-						r.AddRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name, value)
-					} else if rValue != value {
-						r.UpdateRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name, value)
+					// Check for removed or changed keys
+					for name, value := range lRepo.ActionVariables.GetEntity() {
+						if rValue, ok := rRepo.ActionVariables.GetEntity()[name]; !ok {
+							r.AddRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name, value)
+						} else if rValue != value {
+							r.UpdateRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name, value)
+						}
 					}
-				}
 
-				// Check for added keys
-				for name := range rRepo.ActionVariables {
-					if _, ok := lRepo.ActionVariables[name]; !ok {
-						r.DeleteRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name)
+					// Check for added keys
+					for name := range rRepo.ActionVariables.GetEntity() {
+						if _, ok := lRepo.ActionVariables.GetEntity()[name]; !ok {
+							r.DeleteRepositoryVariable(ctx, errorCollector, dryrun, remote, reponame, name)
+						}
 					}
 				}
 			}

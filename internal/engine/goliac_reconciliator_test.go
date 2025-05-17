@@ -130,7 +130,7 @@ func (m *GoliacRemoteMock) TeamRepositories(ctx context.Context) map[string]map[
 func (m *GoliacRemoteMock) AppIds(ctx context.Context) map[string]int {
 	return m.appids
 }
-func (m *GoliacRemoteMock) CountAssets(ctx context.Context) (int, error) {
+func (m *GoliacRemoteMock) CountAssets(ctx context.Context, warmup bool) (int, error) {
 	return 3, nil
 }
 func (g *GoliacRemoteMock) SetRemoteObservability(feedback observability.RemoteObservability) {
@@ -140,6 +140,18 @@ func (m *GoliacRemoteMock) RepositoriesSecretsPerRepository(ctx context.Context,
 }
 func (m *GoliacRemoteMock) EnvironmentSecretsPerRepository(ctx context.Context, environments []string, repositoryName string) (map[string]map[string]*GithubVariable, error) {
 	return nil, nil
+}
+
+type MockMappedEntityLazyLoader[T any] struct {
+	entity map[string]T
+}
+
+func (m *MockMappedEntityLazyLoader[T]) GetEntity() map[string]T {
+	return m.entity
+}
+
+func NewMockMappedEntityLazyLoader[T any](entity map[string]T) *MockMappedEntityLazyLoader[T] {
+	return &MockMappedEntityLazyLoader[T]{entity: entity}
 }
 
 type ReconciliatorListenerRecorder struct {
@@ -1010,9 +1022,11 @@ func TestReconciliationRepo(t *testing.T) {
 			appids:     make(map[string]int),
 		}
 		remote.repos["teams"] = &GithubRepository{
-			Name:           "teams",
-			ExternalUsers:  map[string]string{},
-			BoolProperties: map[string]bool{},
+			Name:                "teams",
+			ExternalUsers:       map[string]string{},
+			BoolProperties:      map[string]bool{},
+			Environments:        NewMockMappedEntityLazyLoader[*GithubEnvironment](map[string]*GithubEnvironment{}),
+			RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 		}
 
 		toArchive := make(map[string]*GithubRepoComparable)
@@ -1059,9 +1073,11 @@ func TestReconciliationRepo(t *testing.T) {
 			appids:     make(map[string]int),
 		}
 		remote.repos["teams"] = &GithubRepository{
-			Name:           "teams",
-			ExternalUsers:  map[string]string{},
-			BoolProperties: map[string]bool{},
+			Name:                "teams",
+			ExternalUsers:       map[string]string{},
+			BoolProperties:      map[string]bool{},
+			Environments:        NewMockMappedEntityLazyLoader[*GithubEnvironment](map[string]*GithubEnvironment{}),
+			RepositoryVariables: NewMockMappedEntityLazyLoader[string](map[string]string{}),
 		}
 		existing := &GithubTeam{
 			Name:    "existing",
@@ -2993,7 +3009,7 @@ func TestReconciliationRepositoryEnvironments(t *testing.T) {
 			Name:           "test-repo",
 			ExternalUsers:  map[string]string{},
 			BoolProperties: map[string]bool{},
-			Environments:   map[string]*GithubEnvironment{},
+			Environments:   NewMockMappedEntityLazyLoader(map[string]*GithubEnvironment{}),
 		}
 		remote.repos["test-repo"] = remoteRepo
 
@@ -3039,14 +3055,14 @@ func TestReconciliationRepositoryEnvironments(t *testing.T) {
 			Name:           "test-repo",
 			ExternalUsers:  map[string]string{},
 			BoolProperties: map[string]bool{},
-			Environments: map[string]*GithubEnvironment{
+			Environments: NewMockMappedEntityLazyLoader(map[string]*GithubEnvironment{
 				"production": {
 					Name: "production",
 					Variables: map[string]string{
 						"DB_URL": "prod-db-url",
 					},
 				},
-			},
+			}),
 		}
 		remote.repos["test-repo"] = remoteRepo
 
@@ -3099,14 +3115,14 @@ func TestReconciliationRepositoryEnvironments(t *testing.T) {
 			Name:           "test-repo",
 			ExternalUsers:  map[string]string{},
 			BoolProperties: map[string]bool{},
-			Environments: map[string]*GithubEnvironment{
+			Environments: NewMockMappedEntityLazyLoader(map[string]*GithubEnvironment{
 				"production": {
 					Name: "production",
 					Variables: map[string]string{
 						"DB_URL": "old-prod-db-url",
 					},
 				},
-			},
+			}),
 		}
 		remote.repos["test-repo"] = remoteRepo
 

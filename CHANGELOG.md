@@ -1,3 +1,8 @@
+## Goliac v0.18.18
+
+- better team validation mechanic
+- implement a lazy loading for some resources to reduce the number of Github call
+
 ## Goliac v0.18.17
 
 - bugfix: better ruleset type check

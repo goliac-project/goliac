@@ -557,7 +557,7 @@ func (e *GoliacRemoteExecutorMock) AppIds(ctx context.Context) map[string]int {
 func (e *GoliacRemoteExecutorMock) IsEnterprise() bool {
 	return true
 }
-func (m *GoliacRemoteExecutorMock) CountAssets(ctx context.Context) (int, error) {
+func (m *GoliacRemoteExecutorMock) CountAssets(ctx context.Context, warmup bool) (int, error) {
 	return 4, nil
 }
 func (g *GoliacRemoteExecutorMock) SetRemoteObservability(feedback observability.RemoteObservability) {

@@ -126,7 +126,7 @@ func (g *GoliacImpl) SetRemoteObservability(feedback observability.RemoteObserva
 	g.remote.SetRemoteObservability(feedback)
 
 	if feedback != nil {
-		nb, err := g.remote.CountAssets(context.Background())
+		nb, err := g.remote.CountAssets(context.Background(), false)
 		if err != nil {
 			return fmt.Errorf("error when counting assets: %v", err)
 		}
