@@ -52,7 +52,7 @@ type GoliacRemote interface {
 
 	IsEnterprise() bool // check if we are on an Enterprise version, or if we are on GHES 3.11+
 
-	CountAssets(ctx context.Context) (int, error)                      // return the number of (some) assets that will be loaded (to be used with the RemoteObservability/progress bar)
+	CountAssets(ctx context.Context, warmup bool) (int, error)         // return the number of (some) assets that will be loaded (to be used with the RemoteObservability/progress bar)
 	SetRemoteObservability(feedback observability.RemoteObservability) // if you want to get feedback on the loading process
 
 	RepositoriesSecretsPerRepository(ctx context.Context, repositoryName string) (map[string]*GithubVariable, error)
@@ -76,8 +76,8 @@ type GithubRepository struct {
 	BranchProtections   map[string]*GithubBranchProtection // [pattern]branch protection
 	DefaultBranchName   string
 	IsFork              bool
-	Environments        map[string]*GithubEnvironment // [name]environment
-	RepositoryVariables map[string]string             // [variableName]variableValue
+	Environments        MappedEntityLazyLoader[*GithubEnvironment] // [name]environment
+	RepositoryVariables MappedEntityLazyLoader[string]             // [variableName]variableValue
 	// RepositorySecrets    map[string]string            // [variableName]variableValue
 }
 
@@ -218,7 +218,7 @@ type GraplQLAssets struct {
 	} `json:"errors"`
 }
 
-func (g *GoliacRemoteImpl) CountAssets(ctx context.Context) (int, error) {
+func (g *GoliacRemoteImpl) CountAssets(ctx context.Context, warmup bool) (int, error) {
 	variables := make(map[string]interface{})
 	variables["orgLogin"] = g.configGithubOrg
 
@@ -236,13 +236,13 @@ func (g *GoliacRemoteImpl) CountAssets(ctx context.Context) (int, error) {
 	if len(gResult.Errors) > 0 {
 		return 0, fmt.Errorf("graphql error on CountAssets: %v (%v)", gResult.Errors[0].Message, gResult.Errors[0].Path)
 	}
-	totalCount := 2*gResult.Data.Organization.Repositories.TotalCount + // we multiply by 3 because we have the repositories, the teams per repostiory to fetch
+	totalCount := 2*gResult.Data.Organization.Repositories.TotalCount + // we multiply by 2 because we have the repositories, the teams per repostiory to fetch
 		2*gResult.Data.Organization.Teams.TotalCount + // we multiply by 2 because we have the teams and the members per team to fetch
 		gResult.Data.Organization.MembersWithRole.TotalCount +
 		gResult.Data.Organization.SamlIdentityProvider.ExternalIdentities.TotalCount
 
-	if g.manageGithubVariables {
-		totalCount += 2 * gResult.Data.Organization.Repositories.TotalCount // we multiply by 3 because we have the environments per repository, and the variables per repository to fetch
+	if warmup {
+		totalCount += 2 * gResult.Data.Organization.Repositories.TotalCount // we add 2 times because we have the environments per repository, and the variables per repository to fetch
 	}
 
 	return totalCount, nil
@@ -849,16 +849,20 @@ func (g *GoliacRemoteImpl) loadRepositories(ctx context.Context) (map[string]*Gi
 	}
 
 	if g.manageGithubVariables {
-		varsPerRepo, err := g.loadRepositoriesVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
-		if err != nil {
-			return repositories, repositoriesByRefId, err
-		}
-		for repo, vars := range varsPerRepo {
-			repoVars := make(map[string]string)
-			for k, v := range vars {
-				repoVars[k] = v.Value
-			}
-			repositories[repo].RepositoryVariables = repoVars
+		for reponame, repo := range repositories {
+			repo.RepositoryVariables = NewRemoteLazyLoader[string](func() map[string]string {
+				ctx := context.Background()
+				variables, err := g.loadVariablesPerRepository(ctx, repo)
+				if err != nil {
+					logrus.Errorf("error loading variables for repository %s: %v", reponame, err)
+					return map[string]string{}
+				}
+				variablesMap := make(map[string]string)
+				for name, variable := range variables {
+					variablesMap[name] = variable.Value
+				}
+				return variablesMap
+			})
 		}
 
 		// repoSecretsPerRepo, err := g.loadRepositoriesSecrets(ctx, config.Config.GithubConcurrentThreads, repositories)
@@ -869,27 +873,28 @@ func (g *GoliacRemoteImpl) loadRepositories(ctx context.Context) (map[string]*Gi
 		// 	repositories[repo].RepositorySecrets = envSecrets
 		// }
 
-		envPerRepo, err := g.loadEnvironments(ctx, config.Config.GithubConcurrentThreads, repositories)
-		if err != nil {
-			return repositories, repositoriesByRefId, err
-		}
-		for repo, envs := range envPerRepo {
-			repositories[repo].Environments = envs
-		}
+		for reponame, repo := range repositories {
+			repo.Environments = NewRemoteLazyLoader[*GithubEnvironment](func() map[string]*GithubEnvironment {
+				ctx := context.Background()
 
-		envVarsPerRepo, err := g.loadEnvironmentVariables(ctx, config.Config.GithubConcurrentThreads, repositories)
-		if err != nil {
-			return repositories, repositoriesByRefId, err
-		}
-		for repo, envvars := range envVarsPerRepo {
-			for envname, vars := range envvars {
-				env, ok := repositories[repo].Environments[envname]
-				if ok {
-					for k, v := range vars {
-						env.Variables[k] = v.Value
-					}
+				envs, err := g.loadEnvironmentsPerRepository(ctx, repo)
+				if err != nil {
+					logrus.Errorf("error loading environments for repository %s: %v", reponame, err)
+					return map[string]*GithubEnvironment{}
 				}
-			}
+				envsMap := make(map[string]*GithubEnvironment)
+				for name, env := range envs {
+					envsMap[name] = env
+					envvars, err := g.loadEnvironmentVariablesForEnvironmentRepository(ctx, repo.Name, name)
+					if err != nil {
+						logrus.Errorf("error loading variables for environment %s: %v", name, err)
+						return map[string]*GithubEnvironment{}
+					}
+					env.Variables = envvars
+				}
+
+				return envsMap
+			})
 		}
 
 		// envSecretsPerRepo, err := g.loadEnvironmentSecrets(ctx, config.Config.GithubConcurrentThreads, repositories)
@@ -1209,16 +1214,16 @@ func (g *GoliacRemoteImpl) loadTeamRepos(ctx context.Context, repository *Github
 	return teamsrepo, nil
 }
 
-func (g *GoliacRemoteImpl) loadEnvironments(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubEnvironment, error) {
-	var childSpan trace.Span
-	if config.Config.OpenTelemetryEnabled {
-		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentsRepositories")
-		defer childSpan.End()
-	}
-	logrus.Debug("loading environmentsRepositories")
+// func (g *GoliacRemoteImpl) loadEnvironments(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubEnvironment, error) {
+// 	var childSpan trace.Span
+// 	if config.Config.OpenTelemetryEnabled {
+// 		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentsRepositories")
+// 		defer childSpan.End()
+// 	}
+// 	logrus.Debug("loading environmentsRepositories")
 
-	return concurrentCall(ctx, maxGoroutines, repositories, "environments_repos", g.loadEnvironmentsPerRepository, g.feedback)
-}
+// 	return concurrentCall(ctx, maxGoroutines, repositories, "environments_repos", g.loadEnvironmentsPerRepository, g.feedback)
+// }
 
 type EnvironmentsResponse struct {
 	TotalCount   int                        `json:"total_count"`
@@ -1260,16 +1265,16 @@ func (g *GoliacRemoteImpl) loadEnvironmentsPerRepository(ctx context.Context, re
 	return envs, nil
 }
 
-func (g *GoliacRemoteImpl) loadRepositoriesVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubVariable, error) {
-	var childSpan trace.Span
-	if config.Config.OpenTelemetryEnabled {
-		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadVariablesRepositories")
-		defer childSpan.End()
-	}
-	logrus.Debug("loading variablesRepositories")
+// func (g *GoliacRemoteImpl) loadRepositoriesVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubVariable, error) {
+// 	var childSpan trace.Span
+// 	if config.Config.OpenTelemetryEnabled {
+// 		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadVariablesRepositories")
+// 		defer childSpan.End()
+// 	}
+// 	logrus.Debug("loading variablesRepositories")
 
-	return concurrentCall(ctx, maxGoroutines, repositories, "action_variables_repos", g.loadVariablesPerRepository, g.feedback)
-}
+// 	return concurrentCall(ctx, maxGoroutines, repositories, "action_variables_repos", g.loadVariablesPerRepository, g.feedback)
+// }
 
 type VariablesResponse struct {
 	TotalCount int               `json:"total_count"`
@@ -1308,51 +1313,83 @@ func (g *GoliacRemoteImpl) loadVariablesPerRepository(ctx context.Context, repos
 	return variables, nil
 }
 
-func (g *GoliacRemoteImpl) loadEnvironmentVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]map[string]*GithubVariable, error) {
-	var childSpan trace.Span
-	if config.Config.OpenTelemetryEnabled {
-		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentVariables")
-		defer childSpan.End()
-	}
-	logrus.Debug("loading environmentVariables")
+// func (g *GoliacRemoteImpl) loadEnvironmentVariables(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]map[string]*GithubVariable, error) {
+// 	var childSpan trace.Span
+// 	if config.Config.OpenTelemetryEnabled {
+// 		ctx, childSpan = otel.Tracer("goliac").Start(ctx, "loadEnvironmentVariables")
+// 		defer childSpan.End()
+// 	}
+// 	logrus.Debug("loading environmentVariables")
 
-	return concurrentCall(ctx, maxGoroutines, repositories, "environment_variables_repos", g.loadEnvironmentVariablesPerRepository, nil)
-}
+// 	return concurrentCall(ctx, maxGoroutines, repositories, "environment_variables_repos", g.loadEnvironmentVariablesPerRepository, nil)
+// }
 
 type EnvironmentsVariablesResponse struct {
 	TotalCount int               `json:"total_count"`
 	Variables  []*GithubVariable `json:"variables"`
 }
 
-func (g *GoliacRemoteImpl) loadEnvironmentVariablesPerRepository(ctx context.Context, repository *GithubRepository) (map[string]map[string]*GithubVariable, error) {
+// func (g *GoliacRemoteImpl) loadEnvironmentVariablesPerRepository(ctx context.Context, repository *GithubRepository) (map[string]map[string]*GithubVariable, error) {
+// 	// https://docs.github.com/en/enterprise-cloud@latest/rest/actions/variables?apiVersion=2022-11-28#list-environment-variables
+// 	envvars := make(map[string]map[string]*GithubVariable)
+// 	respenvs := EnvironmentsVariablesResponse{}
+
+// 	for _, environment := range repository.Environments {
+// 		envvars[environment.Name] = make(map[string]*GithubVariable)
+// 		page := 1
+// 		for page == 1 || len(respenvs.Variables) == 30 {
+// 			data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/environments/"+environment.Name+"/variables", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
+// 			if err != nil {
+// 				return nil, fmt.Errorf("not able to list environments for repo %s: %v", repository.Name, err)
+// 			}
+
+// 			err = json.Unmarshal(data, &respenvs)
+// 			if err != nil {
+// 				return nil, fmt.Errorf("not able to unmarshall environments for repo %s: %v", repository.Name, err)
+// 			}
+
+// 			for _, e := range respenvs.Variables {
+// 				envvars[environment.Name][e.Name] = e
+// 			}
+
+// 			page++
+
+// 			// sanity check to avoid loops
+// 			if page > FORLOOP_STOP {
+// 				break
+// 			}
+// 		}
+// 	}
+
+// 	return envvars, nil
+// }
+
+func (g *GoliacRemoteImpl) loadEnvironmentVariablesForEnvironmentRepository(ctx context.Context, repositoryName string, environmentName string) (map[string]string, error) {
 	// https://docs.github.com/en/enterprise-cloud@latest/rest/actions/variables?apiVersion=2022-11-28#list-environment-variables
-	envvars := make(map[string]map[string]*GithubVariable)
 	respenvs := EnvironmentsVariablesResponse{}
 
-	for _, environment := range repository.Environments {
-		envvars[environment.Name] = make(map[string]*GithubVariable)
-		page := 1
-		for page == 1 || len(respenvs.Variables) == 30 {
-			data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/environments/"+environment.Name+"/variables", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
-			if err != nil {
-				return nil, fmt.Errorf("not able to list environments for repo %s: %v", repository.Name, err)
-			}
+	envvars := make(map[string]string)
+	page := 1
+	for page == 1 || len(respenvs.Variables) == 30 {
+		data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repositoryName+"/environments/"+environmentName+"/variables", fmt.Sprintf("page=%d&per_page=30", page), "GET", nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("not able to list environments for repo %s: %v", repositoryName, err)
+		}
 
-			err = json.Unmarshal(data, &respenvs)
-			if err != nil {
-				return nil, fmt.Errorf("not able to unmarshall environments for repo %s: %v", repository.Name, err)
-			}
+		err = json.Unmarshal(data, &respenvs)
+		if err != nil {
+			return nil, fmt.Errorf("not able to unmarshall environments for repo %s: %v", repositoryName, err)
+		}
 
-			for _, e := range respenvs.Variables {
-				envvars[environment.Name][e.Name] = e
-			}
+		for _, e := range respenvs.Variables {
+			envvars[e.Name] = e.Value
+		}
 
-			page++
+		page++
 
-			// sanity check to avoid loops
-			if page > FORLOOP_STOP {
-				break
-			}
+		// sanity check to avoid loops
+		if page > FORLOOP_STOP {
+			break
 		}
 	}
 
@@ -3473,7 +3510,7 @@ func (g *GoliacRemoteImpl) AddRepositoryEnvironment(ctx context.Context, errorCo
 	}
 
 	// Check if environment already exists
-	if _, exists := repo.Environments[environmentName]; exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName]; exists {
 		errorCollector.AddError(fmt.Errorf("environment %s already exists in repository %s", environmentName, repositoryName))
 		return
 	}
@@ -3495,7 +3532,7 @@ func (g *GoliacRemoteImpl) AddRepositoryEnvironment(ctx context.Context, errorCo
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	repo.Environments[environmentName] = &GithubEnvironment{
+	repo.Environments.GetEntity()[environmentName] = &GithubEnvironment{
 		Name:      environmentName,
 		Variables: map[string]string{},
 	}
@@ -3511,7 +3548,7 @@ func (g *GoliacRemoteImpl) DeleteRepositoryEnvironment(ctx context.Context, erro
 	}
 
 	// Check if environment exists
-	if _, exists := repo.Environments[environmentName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName]; !exists {
 		errorCollector.AddError(fmt.Errorf("environment %s not found in repository %s", environmentName, repositoryName))
 		return
 	}
@@ -3533,7 +3570,7 @@ func (g *GoliacRemoteImpl) DeleteRepositoryEnvironment(ctx context.Context, erro
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	delete(repo.Environments, environmentName)
+	delete(repo.Environments.GetEntity(), environmentName)
 }
 
 // AddRepositoryVariable adds a new variable to a repository
@@ -3546,7 +3583,7 @@ func (g *GoliacRemoteImpl) AddRepositoryVariable(ctx context.Context, errorColle
 	}
 
 	// Check if variable already exists
-	if _, exists := repo.RepositoryVariables[variableName]; exists {
+	if _, exists := repo.RepositoryVariables.GetEntity()[variableName]; exists {
 		errorCollector.AddError(fmt.Errorf("variable %s already exists in repository %s", variableName, repositoryName))
 		return
 	}
@@ -3573,7 +3610,7 @@ func (g *GoliacRemoteImpl) AddRepositoryVariable(ctx context.Context, errorColle
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	repo.RepositoryVariables[variableName] = variableValue
+	repo.RepositoryVariables.GetEntity()[variableName] = variableValue
 }
 
 // UpdateRepositoryVariable updates a variable's value in a repository
@@ -3586,7 +3623,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryVariable(ctx context.Context, errorCo
 	}
 
 	// Check if variable exists
-	if _, exists := repo.RepositoryVariables[variableName]; !exists {
+	if _, exists := repo.RepositoryVariables.GetEntity()[variableName]; !exists {
 		errorCollector.AddError(fmt.Errorf("variable %s not found in repository %s", variableName, repositoryName))
 		return
 	}
@@ -3613,7 +3650,7 @@ func (g *GoliacRemoteImpl) UpdateRepositoryVariable(ctx context.Context, errorCo
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	repo.RepositoryVariables[variableName] = variableValue
+	repo.RepositoryVariables.GetEntity()[variableName] = variableValue
 }
 
 // DeleteRepositoryVariable deletes a variable from a repository
@@ -3626,7 +3663,7 @@ func (g *GoliacRemoteImpl) DeleteRepositoryVariable(ctx context.Context, errorCo
 	}
 
 	// Check if variable exists
-	if _, exists := repo.RepositoryVariables[variableName]; !exists {
+	if _, exists := repo.RepositoryVariables.GetEntity()[variableName]; !exists {
 		errorCollector.AddError(fmt.Errorf("variable %s not found in repository %s", variableName, repositoryName))
 		return
 	}
@@ -3648,7 +3685,7 @@ func (g *GoliacRemoteImpl) DeleteRepositoryVariable(ctx context.Context, errorCo
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	delete(repo.RepositoryVariables, variableName)
+	delete(repo.RepositoryVariables.GetEntity(), variableName)
 }
 
 // AddRepositoryEnvironmentVariable adds a new variable to a repository environment
@@ -3661,13 +3698,13 @@ func (g *GoliacRemoteImpl) AddRepositoryEnvironmentVariable(ctx context.Context,
 	}
 
 	// Check if environment exists
-	if _, exists := repo.Environments[environmentName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName]; !exists {
 		errorCollector.AddError(fmt.Errorf("environment %s not found in repository %s", environmentName, repositoryName))
 		return
 	}
 
 	// Check if variable already exists
-	if _, exists := repo.Environments[environmentName].Variables[variableName]; exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName].Variables[variableName]; exists {
 		errorCollector.AddError(fmt.Errorf("variable %s already exists in environment %s of repository %s", variableName, environmentName, repositoryName))
 		return
 	}
@@ -3694,14 +3731,14 @@ func (g *GoliacRemoteImpl) AddRepositoryEnvironmentVariable(ctx context.Context,
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	if repo.Environments[environmentName] == nil {
+	if repo.Environments.GetEntity()[environmentName] == nil {
 		e := &GithubEnvironment{
 			Name:      environmentName,
 			Variables: map[string]string{},
 		}
-		repo.Environments[environmentName] = e
+		repo.Environments.GetEntity()[environmentName] = e
 	}
-	repo.Environments[environmentName].Variables[variableName] = variableValue
+	repo.Environments.GetEntity()[environmentName].Variables[variableName] = variableValue
 }
 
 // UpdateRepositoryEnvironmentVariable updates a variable's value in a repository environment
@@ -3714,13 +3751,13 @@ func (g *GoliacRemoteImpl) UpdateRepositoryEnvironmentVariable(ctx context.Conte
 	}
 
 	// Check if environment exists
-	if _, exists := repo.Environments[environmentName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName]; !exists {
 		errorCollector.AddError(fmt.Errorf("environment %s not found in repository %s", environmentName, repositoryName))
 		return
 	}
 
 	// Check if variable exists
-	if _, exists := repo.Environments[environmentName].Variables[variableName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName].Variables[variableName]; !exists {
 		errorCollector.AddError(fmt.Errorf("variable %s not found in environment %s of repository %s", variableName, environmentName, repositoryName))
 		return
 	}
@@ -3747,14 +3784,14 @@ func (g *GoliacRemoteImpl) UpdateRepositoryEnvironmentVariable(ctx context.Conte
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	if repo.Environments[environmentName] == nil {
+	if repo.Environments.GetEntity()[environmentName] == nil {
 		e := &GithubEnvironment{
 			Name:      environmentName,
 			Variables: map[string]string{},
 		}
-		repo.Environments[environmentName] = e
+		repo.Environments.GetEntity()[environmentName] = e
 	}
-	repo.Environments[environmentName].Variables[variableName] = variableValue
+	repo.Environments.GetEntity()[environmentName].Variables[variableName] = variableValue
 }
 
 // DeleteRepositoryEnvironmentVariable removes a variable from a repository environment
@@ -3767,13 +3804,13 @@ func (g *GoliacRemoteImpl) DeleteRepositoryEnvironmentVariable(ctx context.Conte
 	}
 
 	// Check if environment exists
-	if _, exists := repo.Environments[environmentName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName]; !exists {
 		errorCollector.AddError(fmt.Errorf("environment %s not found in repository %s", environmentName, repositoryName))
 		return
 	}
 
 	// Check if variable exists
-	if _, exists := repo.Environments[environmentName].Variables[variableName]; !exists {
+	if _, exists := repo.Environments.GetEntity()[environmentName].Variables[variableName]; !exists {
 		errorCollector.AddError(fmt.Errorf("variable %s not found in environment %s of repository %s", variableName, environmentName, repositoryName))
 		return
 	}
@@ -3795,14 +3832,14 @@ func (g *GoliacRemoteImpl) DeleteRepositoryEnvironmentVariable(ctx context.Conte
 	defer g.actionMutex.Unlock()
 
 	// Update local cache
-	if repo.Environments[environmentName] == nil {
+	if repo.Environments.GetEntity()[environmentName] == nil {
 		e := &GithubEnvironment{
 			Name:      environmentName,
 			Variables: map[string]string{},
 		}
-		repo.Environments[environmentName] = e
+		repo.Environments.GetEntity()[environmentName] = e
 	}
-	delete(repo.Environments[environmentName].Variables, variableName)
+	delete(repo.Environments.GetEntity()[environmentName].Variables, variableName)
 }
 
 func (g *GoliacRemoteImpl) Begin(dryrun bool) {

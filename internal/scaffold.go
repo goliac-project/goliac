@@ -61,7 +61,7 @@ func (s *Scaffold) SetRemoteObservability(feedback observability.RemoteObservabi
 	s.remote.SetRemoteObservability(feedback)
 	s.feedback = feedback
 	if feedback != nil {
-		nb, err := s.remote.CountAssets(context.Background())
+		nb, err := s.remote.CountAssets(context.Background(), true)
 		if err != nil {
 			return fmt.Errorf("error when counting assets: %v", err)
 		}
@@ -224,6 +224,41 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 			}
 		}
 	}
+
+	// warmup
+	repos := s.remote.Repositories(ctx)
+	jobs := make(chan *engine.GithubRepository, len(repos))
+	results := make(chan error, len(repos))
+
+	// Start workers
+	for w := int64(0); w < config.Config.GithubConcurrentThreads; w++ {
+		go func() {
+			for r := range jobs {
+				r.Environments.GetEntity()
+				if s.feedback != nil {
+					s.feedback.LoadingAsset(fmt.Sprintf("environments for %s", r.Name), 1)
+				}
+				r.RepositoryVariables.GetEntity()
+				if s.feedback != nil {
+					s.feedback.LoadingAsset(fmt.Sprintf("variables for %s", r.Name), 1)
+				}
+				results <- nil
+			}
+		}()
+	}
+
+	// Send jobs
+	for _, r := range repos {
+		jobs <- r
+	}
+	close(jobs)
+
+	// Wait for all jobs to complete
+	for i := 0; i < len(repos); i++ {
+		<-results
+	}
+
+	// end of warmup
 
 	countOrphaned := 0
 	// orphan repos should go to the admin team
@@ -389,9 +424,9 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 					// scaffoldling repository environments, env variables and variables
 					rEnvironments := rRepo.Environments
 					if rEnvironments != nil {
-						lRepo.Spec.Environments = make([]entity.RepositoryEnvironment, 0, len(rEnvironments))
+						lRepo.Spec.Environments = make([]entity.RepositoryEnvironment, 0, len(rEnvironments.GetEntity()))
 
-						for _, e := range rEnvironments {
+						for _, e := range rEnvironments.GetEntity() {
 							re := entity.RepositoryEnvironment{
 								Name:      e.Name,
 								Variables: make(map[string]string),
@@ -404,8 +439,10 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 					}
 
 					lRepo.Spec.ActionsVariables = make(map[string]string)
-					for n, v := range rRepo.RepositoryVariables {
-						lRepo.Spec.ActionsVariables[n] = v
+					if rRepo.RepositoryVariables != nil {
+						for n, v := range rRepo.RepositoryVariables.GetEntity() {
+							lRepo.Spec.ActionsVariables[n] = v
+						}
 					}
 				}
 

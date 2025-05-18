@@ -7,6 +7,61 @@ import (
 	"github.com/gosimple/slug"
 )
 
+type MutableEnvironmentLazyLoader struct {
+	source MappedEntityLazyLoader[*GithubEnvironment]
+	entity map[string]*GithubEnvironment
+}
+
+func NewMutableEnvironmentLazyLoader(source MappedEntityLazyLoader[*GithubEnvironment]) *MutableEnvironmentLazyLoader {
+	return &MutableEnvironmentLazyLoader{source: source}
+}
+
+func (l *MutableEnvironmentLazyLoader) GetEntity() map[string]*GithubEnvironment {
+	if l.entity == nil {
+		if l.source == nil {
+			l.entity = make(map[string]*GithubEnvironment)
+		} else {
+			e := l.source.GetEntity()
+			l.entity = make(map[string]*GithubEnvironment)
+			for k, v := range e {
+				env := &GithubEnvironment{
+					Name:      v.Name,
+					Variables: make(map[string]string),
+				}
+				for k2, v2 := range v.Variables {
+					env.Variables[k2] = v2
+				}
+				l.entity[k] = env
+			}
+		}
+	}
+	return l.entity
+}
+
+type MutableRepositoryVariableLazyLoader struct {
+	source MappedEntityLazyLoader[string]
+	entity map[string]string
+}
+
+func NewMutableRepositoryVariableLazyLoader(source MappedEntityLazyLoader[string]) *MutableRepositoryVariableLazyLoader {
+	return &MutableRepositoryVariableLazyLoader{source: source}
+}
+
+func (l *MutableRepositoryVariableLazyLoader) GetEntity() map[string]string {
+	if l.entity == nil {
+		if l.source == nil {
+			l.entity = make(map[string]string)
+		} else {
+			e := l.source.GetEntity()
+			l.entity = make(map[string]string)
+			for k, v := range e {
+				l.entity[k] = v
+			}
+		}
+	}
+	return l.entity
+}
+
 /*
  * MutableGoliacRemoteImpl is used by GoliacReconciliatorImpl to update
  * the internal status of Github representation before appyling it for real
@@ -51,20 +106,13 @@ func NewMutableGoliacRemoteImpl(ctx context.Context, remote GoliacRemote) *Mutab
 			ghbranchprotections[k] = v
 		}
 		ghr.BranchProtections = ghbranchprotections
-		ghenv := make(map[string]*GithubEnvironment)
-		for k, v := range v.Environments {
-			ghenv[k] = v
-		}
-		ghr.Environments = ghenv
-		for k, v := range v.RepositoryVariables {
-			ghr.RepositoryVariables[k] = v
-		}
+		ghr.Environments = NewMutableEnvironmentLazyLoader(
+			v.Environments,
+		)
+		ghr.RepositoryVariables = NewMutableRepositoryVariableLazyLoader(
+			v.RepositoryVariables,
+		)
 		rRepositories[k] = &ghr
-		ghVariables := make(map[string]string)
-		for k, v := range v.RepositoryVariables {
-			ghVariables[k] = v
-		}
-		rRepositories[k].RepositoryVariables = ghVariables
 		ghExternalUsers := make(map[string]string)
 		for k, v := range v.ExternalUsers {
 			ghExternalUsers[k] = v
@@ -359,59 +407,59 @@ func (m *MutableGoliacRemoteImpl) DeleteRuleset(rulesetid int) {
 
 func (m *MutableGoliacRemoteImpl) AddRepositoryEnvironment(repositoryName string, environmentName string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		r.Environments[environmentName] = &GithubEnvironment{
+		r.Environments.GetEntity()[environmentName] = &GithubEnvironment{
 			Name:      environmentName,
 			Variables: map[string]string{},
 		}
 	}
 }
 func (m *MutableGoliacRemoteImpl) DeleteRepositoryEnvironment(repositoryName string, environmentName string) {
-	delete(m.repositories[repositoryName].Environments, environmentName)
+	delete(m.repositories[repositoryName].Environments.GetEntity(), environmentName)
 }
 
 // Repository variables management
 func (m *MutableGoliacRemoteImpl) AddRepositoryVariable(repositoryName string, variableName string, variableValue string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		r.RepositoryVariables[variableName] = variableValue
+		r.RepositoryVariables.GetEntity()[variableName] = variableValue
 	}
 }
 func (m *MutableGoliacRemoteImpl) UpdateRepositoryVariable(repositoryName string, variableName string, variableValue string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		r.RepositoryVariables[variableName] = variableValue
+		r.RepositoryVariables.GetEntity()[variableName] = variableValue
 	}
 }
 
 func (m *MutableGoliacRemoteImpl) DeleteRepositoryVariable(repositoryName string, variableName string) {
-	delete(m.repositories[repositoryName].RepositoryVariables, variableName)
+	delete(m.repositories[repositoryName].RepositoryVariables.GetEntity(), variableName)
 }
 
 // Environment variables management
 func (m *MutableGoliacRemoteImpl) AddRepositoryEnvironmentVariable(repositoryName string, environmentName string, variableName string, variableValue string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		if r.Environments[environmentName] == nil {
-			r.Environments[environmentName] = &GithubEnvironment{
+		if r.Environments.GetEntity()[environmentName] == nil {
+			r.Environments.GetEntity()[environmentName] = &GithubEnvironment{
 				Name:      environmentName,
 				Variables: map[string]string{},
 			}
 		}
-		r.Environments[environmentName].Variables[variableName] = variableValue
+		r.Environments.GetEntity()[environmentName].Variables[variableName] = variableValue
 	}
 }
 func (m *MutableGoliacRemoteImpl) UpdateRepositoryEnvironmentVariable(repositoryName string, environmentName string, variableName string, variableValue string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		if r.Environments[environmentName] == nil {
-			r.Environments[environmentName] = &GithubEnvironment{
+		if r.Environments.GetEntity()[environmentName] == nil {
+			r.Environments.GetEntity()[environmentName] = &GithubEnvironment{
 				Name:      environmentName,
 				Variables: map[string]string{},
 			}
 		}
-		r.Environments[environmentName].Variables[variableName] = variableValue
+		r.Environments.GetEntity()[environmentName].Variables[variableName] = variableValue
 	}
 }
 func (m *MutableGoliacRemoteImpl) DeleteRepositoryEnvironmentVariable(repositoryName string, environmentName string, variableName string) {
 	if r, ok := m.repositories[repositoryName]; ok {
-		if r.Environments[environmentName] != nil {
-			delete(r.Environments[environmentName].Variables, variableName)
+		if r.Environments.GetEntity()[environmentName] != nil {
+			delete(r.Environments.GetEntity()[environmentName].Variables, variableName)
 		}
 	}
 }

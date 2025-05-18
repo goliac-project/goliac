@@ -210,7 +210,7 @@
                         value: statistics.lastTimeToApply,
                     },
                     {
-                        key: "Lat Number of Github API Calls",
+                        key: "Last Number of Github API Calls",
                         value: statistics.lastGithubApiCalls,
                     },
                     {
