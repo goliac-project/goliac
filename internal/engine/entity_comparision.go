@@ -1,7 +1,7 @@
 package engine
 
 type Comparable interface {
-	*GithubTeamComparable | *GithubRepoComparable | *GithubRuleSet | *GithubBranchProtection | *GithubEnvironment
+	*GithubTeamComparable | *GithubRepoComparable | *GithubRuleSet | *GithubBranchProtection | *GithubEnvironment | *GithubAutolink
 }
 
 type CompareEqualAB[A Comparable, B Comparable] func(key string, value1 A, value2 B) bool

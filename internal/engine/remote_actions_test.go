@@ -91,7 +91,7 @@ func TestLoadEnvironmentsPerRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -128,7 +128,7 @@ func TestLoadEnvironmentsPerRepository(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -150,7 +150,7 @@ func TestLoadEnvironmentsPerRepository(t *testing.T) {
 			responseBody: `invalid json`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -175,7 +175,7 @@ func TestLoadEnvironmentsPerRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -270,7 +270,7 @@ func TestLoadVariablesPerRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -311,7 +311,7 @@ func TestLoadVariablesPerRepository(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -333,7 +333,7 @@ func TestLoadVariablesPerRepository(t *testing.T) {
 			accessTokenErr: fmt.Errorf("failed to get access token"),
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -355,7 +355,7 @@ func TestLoadVariablesPerRepository(t *testing.T) {
 			responseBody: `invalid json`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -380,7 +380,7 @@ func TestLoadVariablesPerRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		repo := &GithubRepository{
 			Name: "test-repo",
 			Id:   123,
@@ -476,7 +476,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 			}`,
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name: "test-repo",
 // 			Id:   123,
@@ -516,7 +516,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 			errorMessage: "API error",
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name: "test-repo",
 // 			Id:   123,
@@ -542,7 +542,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 	t.Run("happy path: empty environments", func(t *testing.T) {
 // 		mockClient := &LoadEnvironmentVariablesPerRepositoryMockClient{}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name:         "test-repo",
 // 			Id:           123,
@@ -565,7 +565,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 			accessTokenErr: fmt.Errorf("failed to get access token"),
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name: "test-repo",
 // 			Id:   123,
@@ -593,7 +593,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 			responseBody: `invalid json`,
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name: "test-repo",
 // 			Id:   123,
@@ -624,7 +624,7 @@ func (m *LoadEnvironmentVariablesPerRepositoryMockClient) GetAppSlug() string {
 // 			}`,
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repo := &GithubRepository{
 // 			Name: "test-repo",
 // 			Id:   123,
@@ -727,7 +727,7 @@ func (m *LoadRepositoriesVariablesMockClient) GetAppSlug() string {
 // 			}`,
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repositories := map[string]*GithubRepository{
 // 			"repo1": {
 // 				Name: "repo1",
@@ -777,7 +777,7 @@ func (m *LoadRepositoriesVariablesMockClient) GetAppSlug() string {
 // 			errorMessage: "API error",
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repositories := map[string]*GithubRepository{
 // 			"repo1": {
 // 				Name: "repo1",
@@ -809,7 +809,7 @@ func (m *LoadRepositoriesVariablesMockClient) GetAppSlug() string {
 // 			}`,
 // 		}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repositories := map[string]*GithubRepository{}
 
 // 		// Create 5 test repositories
@@ -843,7 +843,7 @@ func (m *LoadRepositoriesVariablesMockClient) GetAppSlug() string {
 // 	t.Run("error path: context cancellation", func(t *testing.T) {
 // 		mockClient := &LoadRepositoriesVariablesMockClient{}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repositories := map[string]*GithubRepository{
 // 			"repo1": {
 // 				Name: "repo1",
@@ -866,7 +866,7 @@ func (m *LoadRepositoriesVariablesMockClient) GetAppSlug() string {
 // 	t.Run("happy path: empty repositories map", func(t *testing.T) {
 // 		mockClient := &LoadRepositoriesVariablesMockClient{}
 
-// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+// 		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true,true)
 // 		repositories := map[string]*GithubRepository{}
 
 // 		ctx := context.TODO()

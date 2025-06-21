@@ -25,7 +25,7 @@ type UnmanagedResources struct {
  * GoliacReconciliator is here to sync the local state to the remote state
  */
 type GoliacReconciliator interface {
-	Reconciliate(ctx context.Context, errorCollector *observability.ErrorCollection, local GoliacLocal, remote GoliacRemote, teamreponame string, branch string, dryrun bool, goliacAdminSlug string, reposToArchive map[string]*GithubRepoComparable, reposToRename map[string]*entity.Repository, manageGithubVariables bool) (*UnmanagedResources, error)
+	Reconciliate(ctx context.Context, errorCollector *observability.ErrorCollection, local GoliacLocal, remote GoliacRemote, teamreponame string, branch string, dryrun bool, goliacAdminSlug string, reposToArchive map[string]*GithubRepoComparable, reposToRename map[string]*entity.Repository, manageGithubVariables bool, manageGithubAutolinks bool) (*UnmanagedResources, error)
 }
 
 type GoliacReconciliatorImpl struct {
@@ -44,7 +44,7 @@ func NewGoliacReconciliatorImpl(isEntreprise bool, executor ReconciliatorExecuto
 	}
 }
 
-func (r *GoliacReconciliatorImpl) Reconciliate(ctx context.Context, errorCollector *observability.ErrorCollection, local GoliacLocal, remote GoliacRemote, teamsreponame string, branch string, dryrun bool, goliacAdminSlug string, reposToArchive map[string]*GithubRepoComparable, reposToRename map[string]*entity.Repository, manageGithubVariables bool) (*UnmanagedResources, error) {
+func (r *GoliacReconciliatorImpl) Reconciliate(ctx context.Context, errorCollector *observability.ErrorCollection, local GoliacLocal, remote GoliacRemote, teamsreponame string, branch string, dryrun bool, goliacAdminSlug string, reposToArchive map[string]*GithubRepoComparable, reposToRename map[string]*entity.Repository, manageGithubVariables bool, manageGithubAutolinks bool) (*UnmanagedResources, error) {
 	rremote := NewMutableGoliacRemoteImpl(ctx, remote)
 	r.Begin(ctx, dryrun)
 	unmanaged := &UnmanagedResources{
@@ -68,7 +68,7 @@ func (r *GoliacReconciliatorImpl) Reconciliate(ctx context.Context, errorCollect
 		return nil, err
 	}
 
-	err = r.reconciliateRepositories(ctx, errorCollector, local, rremote, teamsreponame, branch, dryrun, reposToArchive, reposToRename, manageGithubVariables)
+	err = r.reconciliateRepositories(ctx, errorCollector, local, rremote, teamsreponame, branch, dryrun, reposToArchive, reposToRename, manageGithubVariables, manageGithubAutolinks)
 	if err != nil {
 		r.Rollback(ctx, dryrun, err)
 		return nil, err
@@ -392,6 +392,7 @@ type GithubRepoComparable struct {
 	DefaultBranchName   string
 	ActionVariables     MappedEntityLazyLoader[string]
 	Environments        MappedEntityLazyLoader[*GithubEnvironment]
+	Autolinks           MappedEntityLazyLoader[*GithubAutolink]
 }
 
 type GithubEnvironment struct {
@@ -399,11 +400,29 @@ type GithubEnvironment struct {
 	Variables map[string]string
 }
 
+type GithubAutolink struct {
+	Id             int
+	KeyPrefix      string
+	UrlTemplate    string
+	IsAlphanumeric bool
+}
+
 /*
  * This function sync repositories and team's repositories permissions
  * It returns the list of deleted repos that must not be deleted but archived
  */
-func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, errorCollector *observability.ErrorCollection, local GoliacLocal, remote *MutableGoliacRemoteImpl, teamsreponame string, branch string, dryrun bool, toArchive map[string]*GithubRepoComparable, reposToRename map[string]*entity.Repository, manageGithubVariables bool) error {
+func (r *GoliacReconciliatorImpl) reconciliateRepositories(
+	ctx context.Context,
+	errorCollector *observability.ErrorCollection,
+	local GoliacLocal, remote *MutableGoliacRemoteImpl,
+	teamsreponame string,
+	branch string,
+	dryrun bool,
+	toArchive map[string]*GithubRepoComparable,
+	reposToRename map[string]*entity.Repository,
+	manageGithubVariables bool,
+	manageGithubAutolinks bool,
+) error {
 
 	// let's start with the local cloned github-teams repo
 	lRepos := make(map[string]*GithubRepoComparable)
@@ -447,6 +466,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			DefaultBranchName:   v.DefaultBranchName,
 			Environments:        v.Environments,
 			ActionVariables:     v.RepositoryVariables,
+			Autolinks:           v.Autolinks,
 		}
 		for pk, pv := range v.BoolProperties {
 			repo.BoolProperties[pk] = pv
@@ -605,6 +625,21 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			}
 		}
 
+		var autolinks MappedEntityLazyLoader[*GithubAutolink]
+
+		if lRepo.Spec.Autolinks != nil {
+			autolinksMap := make(map[string]*GithubAutolink)
+			for _, a := range *lRepo.Spec.Autolinks {
+				autolinksMap[a.KeyPrefix] = &GithubAutolink{
+					Id:             0,
+					KeyPrefix:      a.KeyPrefix,
+					UrlTemplate:    a.UrlTemplate,
+					IsAlphanumeric: a.IsAlphanumeric,
+				}
+			}
+			autolinks = NewLocalLazyLoader(autolinksMap)
+		}
+
 		lRepos[utils.GithubAnsiString(reponame)] = r.reconciliatorFilter.RepositoryFilter(reponame, &GithubRepoComparable{
 			BoolProperties: map[string]bool{
 				"archived":               lRepo.Archived,
@@ -623,6 +658,7 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 			DefaultBranchName:   lRepo.Spec.DefaultBranchName,
 			Environments:        NewLocalLazyLoader(environments),
 			ActionVariables:     NewLocalLazyLoader(lRepo.Spec.ActionsVariables),
+			Autolinks:           autolinks,
 		})
 	}
 
@@ -699,6 +735,22 @@ func (r *GoliacReconciliatorImpl) reconciliateRepositories(ctx context.Context, 
 					r.DeleteRepositoryEnvironment(ctx, errorCollector, dryrun, remote, reponame, environment)
 				}
 				CompareEntities(lRepo.Environments.GetEntity(), rRepo.Environments.GetEntity(), compareEnvironments, onEnvironmentAdded, onEnvironmentRemoved, onEnvironmentChange)
+			}
+
+			if manageGithubAutolinks {
+				// nested autolinks comparison IF it is defined locally
+				if lRepo.Autolinks != nil {
+					onAutolinkAdded := func(autolinkprefix string, lal *GithubAutolink, ral *GithubAutolink) {
+						r.AddRepositoryAutolink(ctx, errorCollector, dryrun, remote, reponame, lal)
+					}
+					onAutolinkRemoved := func(autolinkprefix string, lal *GithubAutolink, ral *GithubAutolink) {
+						r.DeleteRepositoryAutolink(ctx, errorCollector, dryrun, remote, reponame, ral.Id)
+					}
+					onAutolinkChange := func(autolinkname string, lal *GithubAutolink, ral *GithubAutolink) {
+						r.UpdateRepositoryAutolink(ctx, errorCollector, dryrun, remote, reponame, ral)
+					}
+					CompareEntities(lRepo.Autolinks.GetEntity(), rRepo.Autolinks.GetEntity(), compareAutolinks, onAutolinkAdded, onAutolinkRemoved, onAutolinkChange)
+				}
 			}
 		}
 
@@ -975,6 +1027,19 @@ func compareEnvironments(environment string, lEnv *GithubEnvironment, rEnv *Gith
 		if rEnv.Variables[k] != v {
 			return false
 		}
+	}
+	return true
+}
+
+func compareAutolinks(autolinkname string, lal *GithubAutolink, ral *GithubAutolink) bool {
+	if lal.KeyPrefix != ral.KeyPrefix {
+		return false
+	}
+	if lal.UrlTemplate != ral.UrlTemplate {
+		return false
+	}
+	if lal.IsAlphanumeric != ral.IsAlphanumeric {
+		return false
 	}
 	return true
 }
@@ -1361,6 +1426,27 @@ func (r *GoliacReconciliatorImpl) DeleteRepositoryEnvironmentVariable(ctx contex
 	remote.DeleteRepositoryEnvironmentVariable(reponame, environment, variable)
 	if r.executor != nil {
 		r.executor.DeleteRepositoryEnvironmentVariable(ctx, errorCollector, dryrun, reponame, environment, variable)
+	}
+}
+func (r *GoliacReconciliatorImpl) AddRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, autolink *GithubAutolink) {
+	logrus.WithFields(map[string]interface{}{"dryrun": dryrun, "command": "add_repository_autolink"}).Infof("repository: %s, autolink: %s", reponame, autolink.KeyPrefix)
+	remote.AddRepositoryAutolink(reponame, autolink)
+	if r.executor != nil {
+		r.executor.AddRepositoryAutolink(ctx, errorCollector, dryrun, reponame, autolink)
+	}
+}
+func (r *GoliacReconciliatorImpl) DeleteRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, autolinkId int) {
+	logrus.WithFields(map[string]interface{}{"dryrun": dryrun, "command": "delete_repository_autolink"}).Infof("repository: %s, autolink id: %d", reponame, autolinkId)
+	remote.DeleteRepositoryAutolink(reponame, autolinkId)
+	if r.executor != nil {
+		r.executor.DeleteRepositoryAutolink(ctx, errorCollector, dryrun, reponame, autolinkId)
+	}
+}
+func (r *GoliacReconciliatorImpl) UpdateRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, remote *MutableGoliacRemoteImpl, reponame string, autolink *GithubAutolink) {
+	logrus.WithFields(map[string]interface{}{"dryrun": dryrun, "command": "update_repository_autolink"}).Infof("repository: %s, autolink: %s", reponame, autolink.KeyPrefix)
+	remote.UpdateRepositoryAutolink(reponame, autolink)
+	if r.executor != nil {
+		r.executor.UpdateRepositoryAutolink(ctx, errorCollector, dryrun, reponame, autolink)
 	}
 }
 func (r *GoliacReconciliatorImpl) Begin(ctx context.Context, dryrun bool) {

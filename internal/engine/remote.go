@@ -79,6 +79,7 @@ type GithubRepository struct {
 	Environments        MappedEntityLazyLoader[*GithubEnvironment] // [name]environment
 	RepositoryVariables MappedEntityLazyLoader[string]             // [variableName]variableValue
 	// RepositorySecrets    map[string]string            // [variableName]variableValue
+	Autolinks MappedEntityLazyLoader[*GithubAutolink] // [keyPrefix]autolink
 }
 
 type GithubTeam struct {
@@ -147,6 +148,7 @@ type GoliacRemoteImpl struct {
 	actionMutex           sync.Mutex // used when an action (like a REST CALL to create a repository) is launched while a load is in progress
 	configGithubOrg       string
 	manageGithubVariables bool
+	manageGithubAutolinks bool
 }
 
 type GHESInfo struct {
@@ -298,7 +300,11 @@ func isEnterprise(ctx context.Context, orgname string, client github.GitHubClien
 	return false
 }
 
-func NewGoliacRemoteImpl(client github.GitHubClient, configGithubOrg string, manageGithubVariables bool) *GoliacRemoteImpl {
+func NewGoliacRemoteImpl(client github.GitHubClient,
+	configGithubOrg string,
+	manageGithubVariables bool,
+	manageGithubAutolinks bool,
+) *GoliacRemoteImpl {
 	ctx := context.Background()
 	return &GoliacRemoteImpl{
 		client:                client,
@@ -320,6 +326,7 @@ func NewGoliacRemoteImpl(client github.GitHubClient, configGithubOrg string, man
 		feedback:              nil,
 		configGithubOrg:       configGithubOrg,
 		manageGithubVariables: manageGithubVariables,
+		manageGithubAutolinks: manageGithubAutolinks,
 	}
 }
 
@@ -904,6 +911,20 @@ func (g *GoliacRemoteImpl) loadRepositories(ctx context.Context) (map[string]*Gi
 		// 	}
 		// }
 	}
+
+	if g.manageGithubAutolinks {
+		for reponame, repo := range repositories {
+			repo.Autolinks = NewRemoteLazyLoader[*GithubAutolink](func() map[string]*GithubAutolink {
+				ctx := context.Background()
+				autolinks, err := g.loadAutolinksPerRepository(ctx, repo)
+				if err != nil {
+					logrus.Errorf("error loading autolinks for repository %s: %v", reponame, err)
+					return map[string]*GithubAutolink{}
+				}
+				return autolinks
+			})
+		}
+	}
 	return repositories, repositoriesByRefId, retErr
 }
 
@@ -1394,6 +1415,40 @@ func (g *GoliacRemoteImpl) loadEnvironmentVariablesForEnvironmentRepository(ctx 
 	}
 
 	return envvars, nil
+}
+
+type AutolinksResponse struct {
+	Id             int    `json:"id"`
+	KeyPrefix      string `json:"key_prefix"`
+	UrlTemplate    string `json:"url_template"`
+	IsAlphanumeric bool   `json:"is_alphanumeric"`
+}
+
+func (g *GoliacRemoteImpl) loadAutolinksPerRepository(ctx context.Context, repository *GithubRepository) (map[string]*GithubAutolink, error) {
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/repos/autolinks?apiVersion=2022-11-28#list-repository-autolinks
+	autolinks := []AutolinksResponse{}
+
+	data, err := g.client.CallRestAPI(ctx, "/repos/"+g.configGithubOrg+"/"+repository.Name+"/autolinks", "", "GET", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("not able to list autolinks for repo %s: %v", repository.Name, err)
+	}
+
+	err = json.Unmarshal(data, &autolinks)
+	if err != nil {
+		return nil, fmt.Errorf("not able to unmarshall autolinks for repo %s: %v", repository.Name, err)
+	}
+
+	autolinksMap := make(map[string]*GithubAutolink)
+	for _, autolink := range autolinks {
+		autolinksMap[autolink.KeyPrefix] = &GithubAutolink{
+			Id:             autolink.Id,
+			KeyPrefix:      autolink.KeyPrefix,
+			UrlTemplate:    autolink.UrlTemplate,
+			IsAlphanumeric: autolink.IsAlphanumeric,
+		}
+	}
+
+	return autolinksMap, nil
 }
 
 // func (g *GoliacRemoteImpl) loadRepositoriesSecrets(ctx context.Context, maxGoroutines int64, repositories map[string]*GithubRepository) (map[string]map[string]*GithubVariable, error) {
@@ -3844,6 +3899,81 @@ func (g *GoliacRemoteImpl) DeleteRepositoryEnvironmentVariable(ctx context.Conte
 		repo.Environments.GetEntity()[environmentName] = e
 	}
 	delete(repo.Environments.GetEntity()[environmentName].Variables, variableName)
+}
+
+func (g *GoliacRemoteImpl) AddRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *GithubAutolink) {
+	// Check if repository exists
+	repo, exists := g.repositories[repositoryName]
+	if !exists {
+		errorCollector.AddError(fmt.Errorf("repository %s not found", repositoryName))
+		return
+	}
+
+	// Call GitHub API to create autolink
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/repos/autolinks?apiVersion=2022-11-28#create-an-autolink-reference-for-a-repository
+	endpoint := fmt.Sprintf("/repos/%s/%s/autolinks", g.configGithubOrg, repositoryName)
+
+	body := map[string]interface{}{
+		"key_prefix":      autolink.KeyPrefix,
+		"url_template":    autolink.UrlTemplate,
+		"is_alphanumeric": autolink.IsAlphanumeric,
+	}
+
+	response, err := g.client.CallRestAPI(ctx, endpoint, "", "POST", body, nil)
+	if err != nil {
+		errorCollector.AddError(fmt.Errorf("failed to create autolink %s in repository %s: %v", autolink.KeyPrefix, repositoryName, err))
+		return
+	}
+
+	var responseAutolink AutolinksResponse
+	err = json.Unmarshal(response, &responseAutolink)
+	if err != nil {
+		errorCollector.AddError(fmt.Errorf("failed to unmarshal autolink response for repository %s: %v", repositoryName, err))
+		return
+	}
+
+	// Update local cache
+	repo.Autolinks.GetEntity()[autolink.KeyPrefix] = &GithubAutolink{
+		Id:             responseAutolink.Id,
+		KeyPrefix:      autolink.KeyPrefix,
+		UrlTemplate:    autolink.UrlTemplate,
+		IsAlphanumeric: autolink.IsAlphanumeric,
+	}
+}
+
+func (g *GoliacRemoteImpl) DeleteRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolinkId int) {
+	// Check if repository exists
+	repo, exists := g.repositories[repositoryName]
+	if !exists {
+		errorCollector.AddError(fmt.Errorf("repository %s not found", repositoryName))
+		return
+	}
+
+	// Call GitHub API to delete autolink
+	// https://docs.github.com/en/enterprise-cloud@latest/rest/repos/autolinks?apiVersion=2022-11-28#delete-an-autolink-reference-from-a-repository
+	endpoint := fmt.Sprintf("/repos/%s/%s/autolinks/%d", g.configGithubOrg, repositoryName, autolinkId)
+
+	_, err := g.client.CallRestAPI(ctx, endpoint, "", "DELETE", nil, nil)
+	if err != nil {
+		errorCollector.AddError(fmt.Errorf("failed to delete autolink %d in repository %s: %v", autolinkId, repositoryName, err))
+		return
+	}
+
+	// Update local cache
+	for key, autolink := range repo.Autolinks.GetEntity() {
+		if autolink.Id == autolinkId {
+			delete(repo.Autolinks.GetEntity(), key)
+			break
+		}
+	}
+}
+
+func (g *GoliacRemoteImpl) UpdateRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *GithubAutolink) {
+	// we need to delete and add the autolink
+	if autolink.Id != 0 {
+		g.DeleteRepositoryAutolink(ctx, errorCollector, dryrun, repositoryName, autolink.Id)
+	}
+	g.AddRepositoryAutolink(ctx, errorCollector, dryrun, repositoryName, autolink)
 }
 
 func (g *GoliacRemoteImpl) Begin(dryrun bool) {

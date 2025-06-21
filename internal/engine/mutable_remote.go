@@ -463,3 +463,21 @@ func (m *MutableGoliacRemoteImpl) DeleteRepositoryEnvironmentVariable(repository
 		}
 	}
 }
+func (m *MutableGoliacRemoteImpl) AddRepositoryAutolink(repositoryName string, autolink *GithubAutolink) {
+	if r, ok := m.repositories[repositoryName]; ok {
+		r.Autolinks.GetEntity()[autolink.KeyPrefix] = autolink
+	}
+}
+func (m *MutableGoliacRemoteImpl) DeleteRepositoryAutolink(repositoryName string, autolinkId int) {
+	for key, autolink := range m.repositories[repositoryName].Autolinks.GetEntity() {
+		if autolink.Id == autolinkId {
+			delete(m.repositories[repositoryName].Autolinks.GetEntity(), key)
+			break
+		}
+	}
+}
+func (m *MutableGoliacRemoteImpl) UpdateRepositoryAutolink(repositoryName string, autolink *GithubAutolink) {
+	if r, ok := m.repositories[repositoryName]; ok {
+		r.Autolinks.GetEntity()[autolink.KeyPrefix] = autolink
+	}
+}

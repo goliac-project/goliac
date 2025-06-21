@@ -64,7 +64,7 @@ func TestFromGraphQLToGithubRuleset(t *testing.T) {
 	t.Run("happy path: complete ruleset conversion", func(t *testing.T) {
 		// Setup mock client and remote impl
 		mockClient := &RulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data - GraphQL ruleset
 		graphqlRuleset := &GraphQLGithubRuleSet{
@@ -217,7 +217,7 @@ func TestFromGraphQLToGithubRuleset(t *testing.T) {
 	t.Run("empty ruleset conversion", func(t *testing.T) {
 		// Setup mock client and remote impl
 		mockClient := &RulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup minimal test data
 		graphqlRuleset := &GraphQLGithubRuleSet{
@@ -315,7 +315,7 @@ func TestAddRuleset(t *testing.T) {
 	t.Run("happy path: add ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &AddRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -442,7 +442,7 @@ func TestAddRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "failed to create ruleset",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup minimal test data
 		ruleset := &GithubRuleSet{
@@ -468,7 +468,7 @@ func TestAddRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &AddRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -504,7 +504,7 @@ func TestAddRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "Invalid ruleset configuration",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data with invalid configuration
 		ruleset := &GithubRuleSet{
@@ -575,7 +575,7 @@ func TestDeleteRuleset(t *testing.T) {
 	t.Run("happy path: delete existing ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add a ruleset to the cache
 		ruleset := &GithubRuleSet{
@@ -611,7 +611,7 @@ func TestDeleteRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "ruleset not found",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add a ruleset to the cache
 		ruleset := &GithubRuleSet{
@@ -641,7 +641,7 @@ func TestDeleteRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add a ruleset to the cache
 		ruleset := &GithubRuleSet{
@@ -676,7 +676,7 @@ func TestDeleteRuleset(t *testing.T) {
 	t.Run("happy path: delete non-existent ruleset ID", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add a ruleset to the cache with different ID
 		ruleset := &GithubRuleSet{
@@ -708,7 +708,7 @@ func TestDeleteRuleset(t *testing.T) {
 	t.Run("error path: delete with multiple rulesets in cache", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add multiple rulesets to the cache
 		ruleset1 := &GithubRuleSet{
@@ -793,7 +793,7 @@ func TestUpdateRuleset(t *testing.T) {
 	t.Run("happy path: update existing ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -927,7 +927,7 @@ func TestUpdateRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "failed to update ruleset",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -963,7 +963,7 @@ func TestUpdateRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -1008,7 +1008,7 @@ func TestUpdateRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "Invalid ruleset configuration",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data with invalid configuration
 		ruleset := &GithubRuleSet{
@@ -1044,7 +1044,7 @@ func TestUpdateRuleset(t *testing.T) {
 	t.Run("error path: non-existent ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data for a ruleset that doesn't exist in cache
 		ruleset := &GithubRuleSet{

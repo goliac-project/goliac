@@ -711,6 +711,19 @@ func (e *GoliacRemoteExecutorMock) DeleteRepositoryEnvironmentVariable(ctx conte
 	fmt.Println("*** RemoveRepositoryEnvironmentVariable", repositoryName, environmentName, variableName)
 	e.nbChanges++
 }
+func (e *GoliacRemoteExecutorMock) AddRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *engine.GithubAutolink) {
+	fmt.Println("*** AddRepositoryAutolink", repositoryName, autolink.KeyPrefix, autolink.UrlTemplate, autolink.IsAlphanumeric)
+	e.nbChanges++
+}
+func (e *GoliacRemoteExecutorMock) DeleteRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolinkId int) {
+	fmt.Println("*** DeleteRepositoryAutolink", repositoryName, autolinkId)
+	e.nbChanges++
+}
+func (e *GoliacRemoteExecutorMock) UpdateRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *engine.GithubAutolink) {
+	fmt.Println("*** UpdateRepositoryAutolink", repositoryName, autolink.KeyPrefix, autolink.UrlTemplate, autolink.IsAlphanumeric)
+	e.nbChanges++
+}
+
 func (e *GoliacRemoteExecutorMock) Begin(dryrun bool) {
 }
 func (e *GoliacRemoteExecutorMock) Rollback(dryrun bool, err error) {

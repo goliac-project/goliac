@@ -1,3 +1,7 @@
+## Goliac v1.1.0
+
+- add repository autolink management
+
 ## Goliac v1.0.0
 
 - add an architecture.md document

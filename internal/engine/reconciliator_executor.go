@@ -52,6 +52,11 @@ type ReconciliatorExecutor interface {
 	UpdateRepositoryEnvironmentVariable(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, environmentName string, variableName string, variableValue string)
 	DeleteRepositoryEnvironmentVariable(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, environmentName string, variableName string)
 
+	// Repository autolinks management
+	AddRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *GithubAutolink)
+	DeleteRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolinkId int)
+	UpdateRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, repositoryName string, autolink *GithubAutolink)
+
 	Begin(dryrun bool)
 	Rollback(dryrun bool, err error)
 	Commit(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool) error

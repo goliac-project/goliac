@@ -3,7 +3,7 @@ package engine
 // generic lazy loader entity
 // it will be used for the Reconciliator to load the entity from the local or remote
 type LazyLoaderEntity interface {
-	string | *GithubEnvironment
+	string | *GithubEnvironment | *GithubAutolink
 }
 
 type MappedEntityLazyLoader[T LazyLoaderEntity] interface {

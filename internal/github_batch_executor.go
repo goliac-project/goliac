@@ -373,6 +373,33 @@ func (g *GithubBatchExecutor) DeleteRepositoryEnvironmentVariable(ctx context.Co
 	})
 }
 
+func (g *GithubBatchExecutor) AddRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, autolink *engine.GithubAutolink) {
+	g.commands = append(g.commands, &GithubCommandAddRepositoryAutolink{
+		client:   g.client,
+		dryrun:   dryrun,
+		reponame: reponame,
+		autolink: autolink,
+	})
+}
+
+func (g *GithubBatchExecutor) DeleteRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, autolinkId int) {
+	g.commands = append(g.commands, &GithubCommandDeleteRepositoryAutolink{
+		client:     g.client,
+		dryrun:     dryrun,
+		reponame:   reponame,
+		autolinkId: autolinkId,
+	})
+}
+
+func (g *GithubBatchExecutor) UpdateRepositoryAutolink(ctx context.Context, errorCollector *observability.ErrorCollection, dryrun bool, reponame string, autolink *engine.GithubAutolink) {
+	g.commands = append(g.commands, &GithubCommandUpdateRepositoryAutolink{
+		client:   g.client,
+		dryrun:   dryrun,
+		reponame: reponame,
+		autolink: autolink,
+	})
+}
+
 func (g *GithubBatchExecutor) Begin(dryrun bool) {
 	g.commands = make([]GithubCommand, 0)
 }
@@ -788,4 +815,37 @@ type GithubCommandDeleteRepositoryEnvironmentVariable struct {
 
 func (g *GithubCommandDeleteRepositoryEnvironmentVariable) Apply(ctx context.Context, errorCollector *observability.ErrorCollection) {
 	g.client.DeleteRepositoryEnvironmentVariable(ctx, errorCollector, g.dryrun, g.reponame, g.environment, g.variable)
+}
+
+type GithubCommandAddRepositoryAutolink struct {
+	client   engine.ReconciliatorExecutor
+	dryrun   bool
+	reponame string
+	autolink *engine.GithubAutolink
+}
+
+func (g *GithubCommandAddRepositoryAutolink) Apply(ctx context.Context, errorCollector *observability.ErrorCollection) {
+	g.client.AddRepositoryAutolink(ctx, errorCollector, g.dryrun, g.reponame, g.autolink)
+}
+
+type GithubCommandDeleteRepositoryAutolink struct {
+	client     engine.ReconciliatorExecutor
+	dryrun     bool
+	reponame   string
+	autolinkId int
+}
+
+func (g *GithubCommandDeleteRepositoryAutolink) Apply(ctx context.Context, errorCollector *observability.ErrorCollection) {
+	g.client.DeleteRepositoryAutolink(ctx, errorCollector, g.dryrun, g.reponame, g.autolinkId)
+}
+
+type GithubCommandUpdateRepositoryAutolink struct {
+	client   engine.ReconciliatorExecutor
+	dryrun   bool
+	reponame string
+	autolink *engine.GithubAutolink
+}
+
+func (g *GithubCommandUpdateRepositoryAutolink) Apply(ctx context.Context, errorCollector *observability.ErrorCollection) {
+	g.client.UpdateRepositoryAutolink(ctx, errorCollector, g.dryrun, g.reponame, g.autolink)
 }

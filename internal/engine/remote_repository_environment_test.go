@@ -89,7 +89,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Call loadEnvironmentVariablesForEnvironmentRepository
@@ -115,7 +115,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Call loadEnvironmentVariablesForEnvironmentRepository
@@ -132,7 +132,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			responseBody: `invalid json`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Call loadEnvironmentVariablesForEnvironmentRepository
@@ -152,7 +152,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Call loadEnvironmentVariablesForEnvironmentRepository
@@ -180,7 +180,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Call loadEnvironmentVariablesForEnvironmentRepository
@@ -222,7 +222,7 @@ func TestLoadEnvironmentVariablesForEnvironmentRepository(t *testing.T) {
 			}`,
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 
 		// Create a repository with an environment
@@ -279,7 +279,7 @@ func TestAddRepositoryEnvironment(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -320,7 +320,7 @@ func TestAddRepositoryEnvironment(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -338,7 +338,7 @@ func TestAddRepositoryEnvironment(t *testing.T) {
 	t.Run("error path: environment already exists", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -373,7 +373,7 @@ func TestAddRepositoryEnvironment(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -413,7 +413,7 @@ func TestAddRepositoryEnvironment(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -455,7 +455,7 @@ func TestDeleteRepositoryEnvironment(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -498,7 +498,7 @@ func TestDeleteRepositoryEnvironment(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -516,7 +516,7 @@ func TestDeleteRepositoryEnvironment(t *testing.T) {
 	t.Run("error path: environment not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -546,7 +546,7 @@ func TestDeleteRepositoryEnvironment(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -588,7 +588,7 @@ func TestDeleteRepositoryEnvironment(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -636,7 +636,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -684,7 +684,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -702,7 +702,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: environment not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -732,7 +732,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: variable already exists", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -769,7 +769,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -813,7 +813,7 @@ func TestAddRepositoryEnvironmentVariable(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -865,7 +865,7 @@ func TestUpdateRepositoryVariable(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -908,7 +908,7 @@ func TestUpdateRepositoryVariable(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -926,7 +926,7 @@ func TestUpdateRepositoryVariable(t *testing.T) {
 	t.Run("error path: variable not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -956,7 +956,7 @@ func TestUpdateRepositoryVariable(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -995,7 +995,7 @@ func TestUpdateRepositoryVariable(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1042,7 +1042,7 @@ func TestDeleteRepositoryVariable(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1082,7 +1082,7 @@ func TestDeleteRepositoryVariable(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1100,7 +1100,7 @@ func TestDeleteRepositoryVariable(t *testing.T) {
 	t.Run("error path: variable not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1130,7 +1130,7 @@ func TestDeleteRepositoryVariable(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1169,7 +1169,7 @@ func TestDeleteRepositoryVariable(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1213,7 +1213,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1263,7 +1263,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1281,7 +1281,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: environment not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1311,7 +1311,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: variable not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1346,7 +1346,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1392,7 +1392,7 @@ func TestUpdateRepositoryEnvironmentVariable(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1446,7 +1446,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 		// Setup mock client
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1493,7 +1493,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1511,7 +1511,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: environment not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1541,7 +1541,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("error path: variable not found", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1576,7 +1576,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 	t.Run("happy path: dry run mode", func(t *testing.T) {
 		mockClient := &LoadEnvironmentVariablesMockClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 
@@ -1622,7 +1622,7 @@ func TestDeleteRepositoryEnvironmentVariable(t *testing.T) {
 			errorMessage: "API error",
 		}
 
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 		ctx := context.TODO()
 		errorCollector := observability.NewErrorCollection()
 

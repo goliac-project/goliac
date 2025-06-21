@@ -42,7 +42,7 @@ func NewScaffold() (*Scaffold, error) {
 		return nil, err
 	}
 
-	remote := engine.NewGoliacRemoteImpl(githubClient, config.Config.GithubAppOrganization, config.Config.ManageGithubActionsVariables)
+	remote := engine.NewGoliacRemoteImpl(githubClient, config.Config.GithubAppOrganization, config.Config.ManageGithubActionsVariables, config.Config.ManageGithubAutolinks)
 
 	loadUsersFromGithubOrgSaml := func(feedback observability.RemoteObservability) (map[string]*entity.User, error) {
 		ctx := context.Background()
@@ -442,6 +442,20 @@ func (s *Scaffold) generateTeams(ctx context.Context, fs billy.Filesystem, teams
 					if rRepo.RepositoryVariables != nil {
 						for n, v := range rRepo.RepositoryVariables.GetEntity() {
 							lRepo.Spec.ActionsVariables[n] = v
+						}
+					}
+
+					rAutolinks := rRepo.Autolinks
+					if rAutolinks != nil && len(rAutolinks.GetEntity()) != 0 {
+						autolinksPtr := make([]entity.RepositoryAutolink, 0, len(rAutolinks.GetEntity()))
+						lRepo.Spec.Autolinks = &autolinksPtr
+						for _, e := range rAutolinks.GetEntity() {
+							ra := entity.RepositoryAutolink{
+								KeyPrefix:      e.KeyPrefix,
+								UrlTemplate:    e.UrlTemplate,
+								IsAlphanumeric: e.IsAlphanumeric,
+							}
+							*lRepo.Spec.Autolinks = append(*lRepo.Spec.Autolinks, ra)
 						}
 					}
 				}

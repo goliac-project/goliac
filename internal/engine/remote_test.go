@@ -454,7 +454,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true, true)
 
 		ctx := context.TODO()
 		repositories, _, err := remoteImpl.loadRepositories(ctx)
@@ -469,7 +469,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true, true)
 
 		ctx := context.TODO()
 		teams, _, err := remoteImpl.loadTeams(ctx)
@@ -482,7 +482,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true, true)
 
 		ctx := context.TODO()
 		repo_0 := &GithubRepository{
@@ -500,7 +500,7 @@ func TestRemoteRepository(t *testing.T) {
 		// MockGithubClient doesn't support concurrent access
 		client := MockGithubClient{}
 
-		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(&client, "myorg", true, true)
 
 		ctx := context.TODO()
 		err := remoteImpl.Load(ctx, false)
@@ -643,7 +643,7 @@ func TestIsEnterprise(t *testing.T) {
 func TestPrepareRuleset(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient, "myorg", true)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg", true, true)
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",
@@ -687,7 +687,7 @@ repositories:
 
 	t.Run("happy path: non default branch name", func(t *testing.T) {
 		ghClient := MockGithubClient{}
-		g := NewGoliacRemoteImpl(&ghClient, "myorg", true)
+		g := NewGoliacRemoteImpl(&ghClient, "myorg", true, true)
 		g.appIds["goliac-project-app"] = 1
 		g.repositories["repo1"] = &GithubRepository{
 			Name: "repo1",

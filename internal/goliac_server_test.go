@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -567,7 +566,6 @@ func TestHandleIssueComment(t *testing.T) {
 		assert.Equal(t, "foobar", fmtest.explanation)
 		assert.Equal(t, "fmtest", fmtest.workflowName)
 
-		fmt.Println(githubClient.lastBody)
 		assert.Equal(t, "Workflow executed successfully", githubClient.lastBody["body"])
 	})
 

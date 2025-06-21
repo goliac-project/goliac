@@ -17,6 +17,12 @@ type RepositoryEnvironment struct {
 	Variables map[string]string `yaml:"variables,omitempty"`
 }
 
+type RepositoryAutolink struct {
+	KeyPrefix      string `yaml:"key_prefix"`
+	UrlTemplate    string `yaml:"url_template"`
+	IsAlphanumeric bool   `yaml:"is_alphanumeric"`
+}
+
 type Repository struct {
 	Entity `yaml:",inline"`
 	Spec   struct {
@@ -33,6 +39,7 @@ type Repository struct {
 		DefaultBranchName   string                       `yaml:"default_branch,omitempty"`
 		Environments        []RepositoryEnvironment      `yaml:"environments,omitempty"`
 		ActionsVariables    map[string]string            `yaml:"actions_variables,omitempty"`
+		Autolinks           *[]RepositoryAutolink        `yaml:"autolinks,omitempty"`
 	} `yaml:"spec,omitempty"`
 	Archived      bool    `yaml:"archived,omitempty"` // implicit: will be set by Goliac
 	Owner         *string `yaml:"-"`                  // implicit. team name owning the repo (if any)

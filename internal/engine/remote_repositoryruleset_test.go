@@ -59,7 +59,7 @@ func TestCreateRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: create repository ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &CreateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository to the remote impl
 		repo := &GithubRepository{
@@ -180,7 +180,7 @@ func TestCreateRepositoryRuleset(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &CreateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup test data
 		ruleset := &GithubRuleSet{
@@ -213,7 +213,7 @@ func TestCreateRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "failed to create ruleset",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository to the remote impl
 		repo := &GithubRepository{
@@ -249,7 +249,7 @@ func TestCreateRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &CreateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository to the remote impl
 		repo := &GithubRepository{
@@ -296,7 +296,7 @@ func TestCreateRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "Invalid ruleset configuration",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository to the remote impl
 		repo := &GithubRepository{
@@ -376,7 +376,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: delete existing ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with ruleset to the remote impl
 		repo := &GithubRepository{
@@ -415,7 +415,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		ctx := context.TODO()
 		remoteImpl.loadRepositories(ctx)
@@ -438,7 +438,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 	t.Run("error path: ruleset not found", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository without the target ruleset
 		repo := &GithubRepository{
@@ -475,7 +475,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "failed to delete ruleset",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with ruleset to the remote impl
 		repo := &GithubRepository{
@@ -511,7 +511,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &DeleteRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with ruleset to the remote impl
 		repo := &GithubRepository{
@@ -557,7 +557,7 @@ func TestDeleteRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "Not Found",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with ruleset to the remote impl
 		repo := &GithubRepository{
@@ -639,7 +639,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: update existing ruleset", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with existing ruleset to the remote impl
 		repo := &GithubRepository{
@@ -766,7 +766,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 	t.Run("error path: repository not found", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Setup ruleset for update
 		ruleset := &GithubRuleSet{
@@ -795,7 +795,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 	t.Run("error path: ruleset not found", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository without the target ruleset
 		repo := &GithubRepository{
@@ -838,7 +838,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "failed to update ruleset",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with existing ruleset
 		repo := &GithubRepository{
@@ -881,7 +881,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 	t.Run("happy path: dry run", func(t *testing.T) {
 		// Setup mock client
 		mockClient := &UpdateRepositoryRulesetMockClient{}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with existing ruleset
 		repo := &GithubRepository{
@@ -933,7 +933,7 @@ func TestUpdateRepositoryRuleset(t *testing.T) {
 			shouldError:  true,
 			errorMessage: "Invalid ruleset configuration",
 		}
-		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true)
+		remoteImpl := NewGoliacRemoteImpl(mockClient, "myorg", true, true)
 
 		// Add repository with existing ruleset
 		repo := &GithubRepository{

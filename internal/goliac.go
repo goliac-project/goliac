@@ -93,7 +93,12 @@ func NewGoliacImpl() (Goliac, error) {
 	}
 
 	local := engine.NewGoliacLocalImpl()
-	remote := engine.NewGoliacRemoteImpl(remoteGithubClient, config.Config.GithubAppOrganization, config.Config.ManageGithubActionsVariables)
+	remote := engine.NewGoliacRemoteImpl(
+		remoteGithubClient,
+		config.Config.GithubAppOrganization,
+		config.Config.ManageGithubActionsVariables,
+		config.Config.ManageGithubAutolinks,
+	)
 
 	usersync.InitPlugins(remoteGithubClient)
 
@@ -583,7 +588,7 @@ func (g *GoliacImpl) applyCommitsToGithub(ctx context.Context, errorCollector *o
 
 	// the repo has already been cloned (to HEAD) and validated (see loadAndValidateGoliacOrganization)
 	// we can now apply the changes to the github team repository
-	unmanaged, err = reconciliator.Reconciliate(ctx, errorCollector, g.local, g.remote, teamreponame, branch, dryrun, g.repoconfig.AdminTeam, reposToArchive, reposToRename, config.Config.ManageGithubActionsVariables)
+	unmanaged, err = reconciliator.Reconciliate(ctx, errorCollector, g.local, g.remote, teamreponame, branch, dryrun, g.repoconfig.AdminTeam, reposToArchive, reposToRename, config.Config.ManageGithubActionsVariables, config.Config.ManageGithubAutolinks)
 	if err != nil {
 		return unmanaged, fmt.Errorf("error when reconciliating: %v", err)
 	}

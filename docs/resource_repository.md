@@ -283,3 +283,30 @@ name: alice
 spec:
   githubID: aliceGithubUserName
 ```
+
+## Add Autolink
+
+Github has a feature called autolinks [documentatopn](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources)
+
+You can set them in the repository like:
+
+```yaml
+apiVersion: v1
+kind: Repository
+name: awesome-repository
+spec:
+  autolinks:
+    - key_prefix: TICKET-
+      url_template: https://example.com/TICKET?query=<num>
+      is_alphanumeric: true
+```
+
+Note: if you need to remove them, use the following convention:
+
+```yaml
+apiVersion: v1
+kind: Repository
+name: awesome-repository
+spec:
+  autolinks: []
+```
