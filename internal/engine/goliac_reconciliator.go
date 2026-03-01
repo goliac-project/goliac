@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/goliac-project/goliac/internal/config"
@@ -269,20 +270,42 @@ func (r *GoliacReconciliatorImpl) reconciliateTeams(ctx context.Context, logsCol
 
 			// membership change
 			if res, _, _ := entity.StringArrayEquivalent(lTeam.Members, rTeam.Members); !res {
+				remoteMembersSnapshot := make([]string, len(rTeam.Members))
+				copy(remoteMembersSnapshot, rTeam.Members)
+				localMembersSnapshot := make([]string, len(lTeam.Members))
+				copy(localMembersSnapshot, lTeam.Members)
+
 				localMembers := make(map[string]bool)
-				for _, m := range lTeam.Members {
+				for _, m := range localMembersSnapshot {
 					localMembers[m] = true
 				}
+				remoteMembers := make(map[string]bool)
+				for _, m := range remoteMembersSnapshot {
+					remoteMembers[m] = true
+				}
 
-				for _, m := range rTeam.Members {
+				membersToRemove := make([]string, 0)
+				for _, m := range remoteMembersSnapshot {
 					if _, ok := localMembers[m]; !ok {
-						// REMOVE team member
-						r.UpdateTeamRemoveMember(ctx, logsCollector, dryrun, remote, slugTeam, m)
-					} else {
-						delete(localMembers, m)
+						membersToRemove = append(membersToRemove, m)
 					}
 				}
-				for m := range localMembers {
+
+				membersToAdd := make([]string, 0)
+				for _, m := range localMembersSnapshot {
+					if _, ok := remoteMembers[m]; !ok {
+						membersToAdd = append(membersToAdd, m)
+					}
+				}
+				sort.Strings(membersToRemove)
+				sort.Strings(membersToAdd)
+
+				for _, m := range membersToRemove {
+					// REMOVE team member
+					r.UpdateTeamRemoveMember(ctx, logsCollector, dryrun, remote, slugTeam, m)
+				}
+
+				for _, m := range membersToAdd {
 					// ADD team member
 					r.UpdateTeamAddMember(ctx, logsCollector, dryrun, remote, slugTeam, m, "member")
 				}
