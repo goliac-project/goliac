@@ -1,3 +1,9 @@
+## Goliac v1.6.7
+
+- couple of security updates
+- add extra 2xx test in GraphQL call
+- fix team membership removal mutation
+
 ## Goliac v1.6.6
 
 - bugfix: lowercase allowed_merge_methods for merge settings
