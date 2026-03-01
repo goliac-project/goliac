@@ -328,6 +328,12 @@ func (client *GitHubClientImpl) QueryGraphQLAPI(ctx context.Context, query strin
 		if childSpan != nil {
 			childSpan.SetAttributes(attribute.String("response", string(responseBody)))
 		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if childSpan != nil {
+				childSpan.SetStatus(codes.Error, fmt.Sprintf("unexpected status: %s, response: %s", resp.Status, string(responseBody)))
+			}
+			return responseBody, fmt.Errorf("unexpected status: %s", resp.Status)
+		}
 
 		return responseBody, nil
 	}
