@@ -9,7 +9,7 @@ RUN make build_ui
 ######################################
 # Prepare go_builder
 ######################################
-FROM golang:1.23-bookworm AS go_builder
+FROM golang:1.24-bookworm AS go_builder
 
 # GITHUB_REF is the current Gihhub tag
 ARG GITHUB_REF=unknown
