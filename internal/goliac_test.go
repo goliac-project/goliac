@@ -379,6 +379,11 @@ type GoliacRemoteExecutorMock struct {
 	nbChanges     int
 }
 
+type GoliacRemoteExecutorFailLoadMock struct {
+	*GoliacRemoteExecutorMock
+	loadErr error
+}
+
 // GoliacRemoteExecutorMock
 func NewGoliacRemoteExecutorMock() engine.GoliacRemoteExecutor {
 	return &GoliacRemoteExecutorMock{
@@ -390,6 +395,10 @@ func NewGoliacRemoteExecutorMock() engine.GoliacRemoteExecutor {
 
 func (e *GoliacRemoteExecutorMock) Load(ctx context.Context, continueOnError bool) error {
 	return nil
+}
+
+func (e *GoliacRemoteExecutorFailLoadMock) Load(ctx context.Context, continueOnError bool) error {
+	return e.loadErr
 }
 func (e *GoliacRemoteExecutorMock) FlushCache() {
 }
@@ -904,5 +913,42 @@ func TestGoliacApply(t *testing.T) {
 		assert.NotNil(t, unmanaged)
 		assert.Equal(t, 4, remote.nbChanges)
 
+	})
+
+	t.Run("refresh failure blocks apply", func(t *testing.T) {
+		fs := memfs.New()
+		fs.MkdirAll("src", 0755)        // create a fake bare repository
+		fs.MkdirAll("teams", 0755)      // create a fake cloned repository
+		fs.MkdirAll(os.TempDir(), 0755) // need a tmp folder
+		srcsFs, _ := fs.Chroot("src")
+		clonedFs, _ := fs.Chroot("teams")
+		_, _, err := helperCreateAndClone(fs, srcsFs, clonedFs, repoFixture1)
+		assert.Nil(t, err)
+
+		local := engine.NewGoliacLocalImpl()
+		logsCollector := observability.NewLogCollection()
+
+		githubClient := NewGitHubClientMock()
+		remote := &GoliacRemoteExecutorFailLoadMock{
+			GoliacRemoteExecutorMock: NewGoliacRemoteExecutorMock().(*GoliacRemoteExecutorMock),
+			loadErr:                  fmt.Errorf("boom"),
+		}
+
+		usersync.InitPlugins(githubClient)
+
+		goliac := GoliacImpl{
+			local:              local,
+			remote:             remote,
+			remoteGithubClient: githubClient,
+			localGithubClient:  githubClient,
+			repoconfig:         &config.RepositoryConfig{},
+		}
+
+		unmanaged := goliac.Apply(context.Background(), logsCollector, fs, false, "inmemory:///src", "master")
+		assert.Nil(t, unmanaged)
+		assert.Equal(t, true, logsCollector.HasErrors())
+		assert.Contains(t, logsCollector.Errors[0].Error(), "error when loading data from Github")
+		assert.Contains(t, logsCollector.Errors[0].Error(), "boom")
+		assert.Equal(t, 0, remote.nbChanges)
 	})
 }

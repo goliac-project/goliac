@@ -27,10 +27,11 @@ func TestQueryGraphQLAPI(t *testing.T) {
 
 	// Replace the httpClient with a mock
 	client := &GitHubClientImpl{
+		gitHubServer: testServer.URL,
 		httpClient: &http.Client{
 			Transport: &MockRoundTripper{
 				RoundTripFunc: func(req *http.Request) (*http.Response, error) {
-					return http.Get(testServer.URL) // Use the test server's URL
+					return http.Get(testServer.URL + "/graphql") // Use the test server's URL
 				},
 			},
 		},
@@ -46,6 +47,51 @@ func TestQueryGraphQLAPI(t *testing.T) {
 
 	if !strings.Contains(string(result), "octocat") {
 		t.Errorf("expected 'octocat' in the result, got %s", result)
+	}
+}
+
+func TestQueryGraphQLAPINon2xxReturnsError(t *testing.T) {
+	testCases := []struct {
+		name       string
+		statusCode int
+	}{
+		{
+			name:       "unauthorized",
+			statusCode: http.StatusUnauthorized,
+		},
+		{
+			name:       "forbidden not rate limited",
+			statusCode: http.StatusForbidden,
+		},
+		{
+			name:       "internal server error",
+			statusCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range testCases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(`{"message":"boom"}`))
+			}))
+			defer testServer.Close()
+
+			client := &GitHubClientImpl{
+				gitHubServer: testServer.URL,
+				httpClient:   &http.Client{},
+			}
+
+			ctx := context.TODO()
+			_, err := client.QueryGraphQLAPI(ctx, "query { viewer { login } }", nil, nil)
+			if err == nil {
+				t.Fatalf("expected an error for status code %d", tt.statusCode)
+			}
+			if !strings.Contains(err.Error(), "unexpected status") {
+				t.Fatalf("expected unexpected status error, got %v", err)
+			}
+		})
 	}
 }
 
