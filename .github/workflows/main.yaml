@@ -28,7 +28,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
 
       # Build Go binaries for different platforms. Name is goliac-`uname -s`-`uname -m` (at least for linux and mac)
       - name: Build binaries
