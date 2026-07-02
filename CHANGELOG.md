@@ -1,3 +1,7 @@
+## Goliac v1.9.6
+
+- update UI dependencies (for security updates mainly)
+
 ## Goliac v1.9.5
 
 - bugfix: when a GitHub repository name matches the teams definition only case-insensitively, reconcile by renaming the repository on GitHub to the exact name from the teams repo (avoids treating it as delete + create)
