@@ -1,6 +1,12 @@
+## Goliac v1.9.7
+
+- build: `make build_ui` now uses Yarn via Corepack to avoid npm optional-dependency issues with Rolldown
+
 ## Goliac v1.9.6
 
-- update UI dependencies (for security updates mainly)
+- update UI dependencies and build tooling (security updates mainly)
+- bugfix: GitHub Pages `visibility: public` can now be reconciled even when GitHub rejects `public: true` (retries Pages API call without `public`)
+- UI: migrate `browser/goliac-ui` from Vue CLI to Vite 8 (includes `VUE_APP_API_URL` -> `VITE_API_URL`)
 
 ## Goliac v1.9.5
 

@@ -9,10 +9,10 @@ build:
 
 build_ui:
 	@echo "Building Goliac UI ..."
-	@cd ./browser/goliac-ui/; npm install --legacy-peer-deps && npm run build
+	@cd ./browser/goliac-ui/; corepack enable && yarn install --frozen-lockfile && yarn build
 
 run_ui:
-	@cd ./browser/goliac-ui/; npm run serve
+	@cd ./browser/goliac-ui/; corepack enable && yarn serve
 
 test: deps verifiers
 	@GO111MODULE=on go test -covermode=atomic -coverprofile=coverage.txt ./internal/...
