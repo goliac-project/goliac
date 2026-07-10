@@ -4442,7 +4442,14 @@ func (g *GoliacRemoteImpl) UpdateRepositoryCodeowners(ctx context.Context, logsC
 			nil,
 		)
 		if err != nil {
-			logsCollector.AddError(fmt.Errorf("failed to update CODEOWNERS for repository %s: %v", reponame, err))
+			var errResp struct {
+				Message string `json:"message"`
+			}
+			if len(respBody) > 0 && json.Unmarshal(respBody, &errResp) == nil && errResp.Message != "" {
+				logsCollector.AddError(fmt.Errorf("failed to update CODEOWNERS for repository %s: %v (message: %s)", reponame, err, errResp.Message))
+			} else {
+				logsCollector.AddError(fmt.Errorf("failed to update CODEOWNERS for repository %s: %v", reponame, err))
+			}
 			return
 		}
 		var putResp struct {

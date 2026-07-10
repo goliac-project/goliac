@@ -112,3 +112,74 @@ func TestGoliacReconciliatorDatasourceLocalShouldInjectOrgRuleset(t *testing.T) 
 	assert.False(t, dl.shouldInjectGoliacBypassOnOrgRuleset(&GithubRuleSet{Enforcement: "active", Rules: nil}, []string{"target-repo"}))
 	assert.False(t, dl.shouldInjectGoliacBypassOnOrgRuleset(&GithubRuleSet{Enforcement: "disabled", Rules: map[string]entity.RuleSetParameters{"pull_request": {}}}, []string{"target-repo"}))
 }
+
+func TestGoliacReconciliatorDatasourceLocalCodeownersBypassInjection_ApprovingReviewCount(t *testing.T) {
+	local := &GoliacLocalImpl{
+		teams:         map[string]*entity.Team{},
+		repositories:  map[string]*entity.Repository{},
+		users:         map[string]*entity.User{},
+		externalUsers: map[string]*entity.User{},
+		rulesets:      map[string]*entity.RuleSet{},
+		workflows:     map[string]*entity.Workflow{},
+		repoconfig:    &config.RepositoryConfig{},
+	}
+
+	repo := &entity.Repository{}
+	repo.Spec.CodeownersRaw = "* @org/team"
+	repo.Spec.BranchProtections = []entity.RepositoryBranchProtection{
+		{Pattern: "main", RequiredApprovingReviewCount: 2},
+	}
+	local.repositories["myrepo"] = repo
+
+	repoconf := &config.RepositoryConfig{AdminTeam: "admin"}
+	d := NewGoliacReconciliatorDatasourceLocal(local, "teams", "main", true, repoconf, "goliac-app")
+
+	repos, _, err := d.Repositories()
+	assert.NoError(t, err)
+	r := repos["myrepo"]
+	bp := r.BranchProtections["main"]
+	found := false
+	for _, n := range bp.BypassPullRequestAllowances.Nodes {
+		if n.Actor.AppSlug == "goliac-app" {
+			found = true
+		}
+	}
+	assert.True(t, found, "Goliac app should be injected as bypass on branch protection when codeowners are defined")
+}
+
+func TestGoliacReconciliatorDatasourceLocalCodeownersBypassInjection_RulesetWithCount(t *testing.T) {
+	local := &GoliacLocalImpl{
+		teams:         map[string]*entity.Team{},
+		repositories:  map[string]*entity.Repository{},
+		users:         map[string]*entity.User{},
+		externalUsers: map[string]*entity.User{},
+		rulesets:      map[string]*entity.RuleSet{},
+		workflows:     map[string]*entity.Workflow{},
+		repoconfig:    &config.RepositoryConfig{},
+	}
+
+	repo := &entity.Repository{}
+	repo.Spec.CodeownersRaw = "* @org/team"
+	lruleset := entity.RepositoryRuleSet{
+		Name: "myruleset",
+	}
+	lruleset.Enforcement = "active"
+	lruleset.Conditions.Include = []string{"~DEFAULT_BRANCH"}
+	lruleset.Rules = append(lruleset.Rules, struct {
+		Ruletype   string
+		Parameters entity.RuleSetParameters `yaml:"parameters,omitempty"`
+	}{
+		"pull_request", entity.RuleSetParameters{RequiredApprovingReviewCount: 1},
+	})
+	repo.Spec.Rulesets = []entity.RepositoryRuleSet{lruleset}
+	local.repositories["myrepo"] = repo
+
+	repoconf := &config.RepositoryConfig{AdminTeam: "admin"}
+	d := NewGoliacReconciliatorDatasourceLocal(local, "teams", "main", true, repoconf, "goliac-app")
+
+	repos, _, err := d.Repositories()
+	assert.NoError(t, err)
+	r := repos["myrepo"]
+	rs := r.Rulesets["myruleset"]
+	assert.Equal(t, githubWorkflowAppBypassMode, rs.BypassApps["goliac-app"])
+}

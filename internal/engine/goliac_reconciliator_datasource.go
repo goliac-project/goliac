@@ -302,18 +302,23 @@ func (d *GoliacReconciliatorDatasourceLocal) Repositories() (map[string]*GithubR
 			branchprotections[bp.Pattern] = &branchprotection
 		}
 
+		hasCodeowners := len(lRepo.Spec.Codeowners) > 0 || strings.TrimSpace(lRepo.Spec.CodeownersRaw) != ""
+
 		// we need to add the Goliac app on the branch protection bypass
 		// if the repository is part of a workflow and if a CODEOWNER review is required
 		// the goal is to allow the Goliac app to bypass the CODEOWNER review when the repository is part of a workflow
-		if d.githubAppSlug != "" && (len(branchprotections) > 0 || len(rulesets) > 0) && d.local.RepositoryInWorkflow(reponame) {
+		// or if the repository defines codeowners and branch protection requires approving reviews
+		if d.githubAppSlug != "" && (len(branchprotections) > 0 || len(rulesets) > 0) {
 			for _, bp := range branchprotections {
-				if bp.RequiresCodeOwnerReviews {
+				if (d.local.RepositoryInWorkflow(reponame) && bp.RequiresCodeOwnerReviews) ||
+					(hasCodeowners && (bp.RequiredApprovingReviewCount > 0 || bp.RequiresCodeOwnerReviews)) {
 					ensureGoliacAppBypassOnBranchProtection(bp, d.githubAppSlug)
 				}
 			}
 			for _, rs := range rulesets {
 				if r, ok := rs.Rules["pull_request"]; ok {
-					if r.RequireCodeOwnerReview {
+					if (d.local.RepositoryInWorkflow(reponame) && r.RequireCodeOwnerReview) ||
+						(hasCodeowners && (r.RequireCodeOwnerReview || r.RequiredApprovingReviewCount > 0)) {
 						ensureGoliacAppBypassOnRuleset(rs, d.githubAppSlug)
 					}
 				}
