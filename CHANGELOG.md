@@ -1,3 +1,8 @@
+## Goliac v1.9.8
+
+- bugfix: add Goliac app to branch protection and ruleset bypass when a repository defines `codeowners` or `codeowners_raw` and branch protection requires approving reviews (`required_approving_review_count` or `requires_code_owner_reviews`), so `UpdateRepositoryCodeowners` can commit without a 409 from repository rules
+- improvement: when `UpdateRepositoryCodeowners` fails, include the GitHub API `message` field (e.g. repository rule violations) in the error output
+
 ## Goliac v1.9.7
 
 - build: `make build_ui` now uses Yarn via Corepack to avoid npm optional-dependency issues with Rolldown
