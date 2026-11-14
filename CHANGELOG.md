@@ -1,3 +1,7 @@
+## Goliac v1.9.14
+
+- security: bump Go module `google.golang.org/grpc` to v1.83.2 (xDS server DoS via missing `:authority`/`Host` headers), with related `golang.org/x/term` and `golang.org/x/text` updates
+
 ## Goliac v1.9.13
 
 - security: bump Go module `google.golang.org/grpc` to v1.83.1 (heap memory exhaustion via HTTP/2 DATA frame fragmentation, xDS server DoS), with related `go.opentelemetry.io/otel` and `genproto` updates
