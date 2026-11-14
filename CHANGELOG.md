@@ -1,3 +1,9 @@
+## Goliac v1.9.13
+
+- security: bump Go module `google.golang.org/grpc` to v1.83.1 (heap memory exhaustion via HTTP/2 DATA frame fragmentation, xDS server DoS), with related `go.opentelemetry.io/otel` and `genproto` updates
+- security: update `browser/goliac-ui` dependencies (`axios` 1.21.1, `vue`/`@vue/server-renderer` 3.5.45, `vite` 8.3.8) and pin transitive `follow-redirects`, `source-map-js`, `js-yaml` via `resolutions` to clear all high-severity Dependabot alerts
+- security: update docs tooling (`vitepress` 1.6.4, `vite` overridden to 6.4.x, refreshed `vue`, `nanoid`, `postcss`, `source-map-js` lockfile entries) so `npm audit` reports no vulnerabilities
+
 ## Goliac v1.9.12
 
 - build: increase Yarn network timeout to 10 minutes for `make build_ui` (`browser/goliac-ui/.yarnrc`)
