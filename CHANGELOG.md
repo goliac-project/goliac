@@ -1,4 +1,4 @@
-## Goliac v1.10.0
+## Goliac v1.9.13
 
 - security: bump Go module `google.golang.org/grpc` to v1.83.1 (heap memory exhaustion via HTTP/2 DATA frame fragmentation, xDS server DoS), with related `go.opentelemetry.io/otel` and `genproto` updates
 - security: update `browser/goliac-ui` dependencies (`axios` 1.21.1, `vue`/`@vue/server-renderer` 3.5.45, `vite` 8.3.8) and pin transitive `follow-redirects`, `source-map-js`, `js-yaml` via `resolutions` to clear all high-severity Dependabot alerts
