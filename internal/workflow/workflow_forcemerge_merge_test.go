@@ -38,6 +38,8 @@ func TestForcemergeMergePRNotStacked(t *testing.T) {
 			expectedReview := "Force merge via Goliac on behalf of test-user.\n\nPR #32: Plain PR\nhttps://github.com/myorg/goliac/pull/32\n\nbecause"
 			if mode != "" {
 				expectedReview += fmt.Sprintf("\n\nMerge mode `%s` ignored: this PR is not part of a stack.", mode)
+			} else {
+				expectedReview += "\n\nMerge mode: none (this PR is not part of a stack)."
 			}
 			assert.Equal(t, expectedReview, reviews[0].Body["body"])
 
@@ -994,7 +996,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 				assert.Equal(t, "APPROVE", r.Body["event"])
 				assert.Equal(t, fmt.Sprintf("sha%d", n), r.Body["commit_id"])
 				assert.Equal(t,
-					fmt.Sprintf("Force merge via Goliac on behalf of test-user.\n\nPR #%d: PR %d\nhttps://github.com/myorg/goliac/pull/%d\n\nship it \n\nMerge mode: `stack`. Merging the whole stack (4 PRs, #1 to #4) into `main`, requested on PR #%d.", n, n, n, from),
+					fmt.Sprintf("Force merge via Goliac on behalf of test-user.\n\nPR #%d: PR %d\nhttps://github.com/myorg/goliac/pull/%d\n\nship it \n\nMerge mode: `stack`. Merging the whole stack (4 PRs, #1 to #4) into `main`, requested on PR #%d. Stack source: GitHub stack metadata.", n, n, n, from),
 					r.Body["body"])
 			}
 

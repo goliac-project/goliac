@@ -47,6 +47,13 @@ type fakePR struct {
 	StackBase     string
 	// raw stack payload overriding the above
 	RawStack interface{}
+	// the branch the PR landed in when GitHub merged it ("" while not merged by the fake)
+	MergedInto string
+}
+
+// githubStacked is true when GitHub itself considers the PR part of a stack (non null stack payload)
+func (p *fakePR) githubStacked() bool {
+	return p.StackSize > 0 || p.RawStack != nil
 }
 
 func (p *fakePR) payload() map[string]interface{} {
@@ -81,6 +88,17 @@ func (p *fakePR) payload() map[string]interface{} {
 		m["stack"] = p.RawStack
 	}
 	return m
+}
+
+// headLabel is the owner:ref GitHub matches the head filter of GET pulls against
+func (p *fakePR) headLabel() string {
+	switch p.HeadRepo {
+	case "":
+		return "myorg:" + p.HeadRef
+	case "-":
+		return "" // deleted fork: never matched
+	}
+	return strings.SplitN(p.HeadRepo, "/", 2)[0] + ":" + p.HeadRef
 }
 
 // fakeClock is a manual clock: Sleep advances the time, nothing really sleeps
@@ -130,6 +148,8 @@ type fakeGitHub struct {
 	settings *struct{ Merge, Squash, Rebase *bool }
 	// raw body for GET /repos/{o}/{r} when set
 	settingsRaw string
+	// default_branch of GET /repos/{o}/{r} ("" = main)
+	defaultBranch string
 
 	syncMerge   func(call restCall) ([]byte, error)
 	branchMerge func(call restCall) ([]byte, error)
@@ -306,7 +326,10 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		if f.settings == nil {
 			return httpError("500 Internal Server Error", `{"message":"no settings"}`)
 		}
-		m := map[string]interface{}{}
+		m := map[string]interface{}{"default_branch": "main"}
+		if f.defaultBranch != "" {
+			m["default_branch"] = f.defaultBranch
+		}
 		if f.settings.Merge != nil {
 			m["allow_merge_commit"] = *f.settings.Merge
 		}
@@ -341,7 +364,7 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			if b := q.Get("base"); b != "" && pr.BaseRef != b {
 				continue
 			}
-			if h := q.Get("head"); h != "" && "myorg:"+pr.HeadRef != h {
+			if h := q.Get("head"); h != "" && pr.headLabel() != h {
 				continue
 			}
 			res = append(res, pr.payload())
@@ -387,6 +410,7 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 				if pr.HeadSha == body["head"] {
 					pr.Merged = true
 					pr.State = "closed"
+					pr.MergedInto, _ = body["base"].(string)
 				}
 			}
 			f.mu.Unlock()
@@ -406,7 +430,14 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 	return unexpected()
 }
 
-// noteAsync marks the PR and its downstack merged when the asynchronous merge says merged
+/*
+ * noteAsync applies an asynchronous merge that GitHub says is merged, like GitHub does
+ * (https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously):
+ * "For a stacked pull request, the operation includes all open downstack pull requests."
+ * Only a PR GitHub itself considers stacked (non null stack payload) takes its open downstack
+ * PRs along, and all of them land in the base branch of the bottom one. Any other PR is
+ * merged alone into its own base branch, even when it is based on another PR's branch.
+ */
 func (f *fakeGitHub) noteAsync(endpoint string, res []byte, err error) {
 	if err != nil || f.neverMarkMerged || !strings.Contains(string(res), `"status":"merged"`) {
 		return
@@ -414,17 +445,32 @@ func (f *fakeGitHub) noteAsync(endpoint string, res []byte, err error) {
 	n, _ := strconv.Atoi(asyncPath.FindStringSubmatch(endpoint)[1])
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cur := f.prs[n]
-	for cur != nil {
-		cur.Merged = true
-		cur.State = "closed"
-		var next *fakePR
-		for _, p := range f.prs {
-			if p.HeadRef == cur.BaseRef && p.State == "open" {
-				next = p
+	top := f.prs[n]
+	if top == nil {
+		return
+	}
+	merged := []*fakePR{top}
+	if top.githubStacked() {
+		cur := top
+		for {
+			var next *fakePR
+			for _, p := range f.prs {
+				if p.HeadRef == cur.BaseRef && p.State == "open" && p.githubStacked() {
+					next = p
+				}
 			}
+			if next == nil {
+				break
+			}
+			merged = append(merged, next)
+			cur = next
 		}
-		cur = next
+	}
+	into := merged[len(merged)-1].BaseRef
+	for _, p := range merged {
+		p.Merged = true
+		p.State = "closed"
+		p.MergedInto = into
 	}
 }
 

@@ -30,6 +30,8 @@ type ForcemergeImpl struct {
 	// restack: number of attempts per PR and first backoff (0 = defaults, the backoff doubles)
 	restackAttempts int
 	restackBackoff  time.Duration
+	// longest stack inferred from a chain of PRs when GitHub sends no stack metadata (0 = default)
+	maxInferredStackSize int
 	// injectable clock (nil = real time)
 	now   func() time.Time
 	sleep func(ctx context.Context, d time.Duration) error
@@ -55,6 +57,8 @@ const (
 	defaultMergedCheckTimeout     = 30 * time.Second
 	defaultRestackAttempts        = 4
 	defaultRestackBackoff         = time.Second
+	// longest chain of PRs walked when a stack is inferred from base branches
+	defaultMaxInferredStackSize = 50
 )
 
 func NewForcemergeImpl(ws WorkflowService) Workflow {
@@ -241,18 +245,32 @@ type pullRequestInfo struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"head"`
-	// Stack is set by GitHub when the PR belongs to a stack of pull requests (null otherwise)
-	Stack *struct {
-		Position int `json:"position"`
-		Size     int `json:"size"`
-		Base     struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-	} `json:"stack"`
+	// Stack is set by GitHub when the PR belongs to a stack of pull requests (null otherwise).
+	// When GitHub sends no stack, Goliac may infer one from the chain of PRs (see inferStack).
+	Stack *prStack `json:"stack"`
+
+	// stackInferred: Stack was inferred by Goliac from the base branches, GitHub sent none
+	stackInferred bool
+}
+
+type prStack struct {
+	Position int `json:"position"`
+	Size     int `json:"size"`
+	Base     struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
 func (pr *pullRequestInfo) isStacked() bool {
 	return pr.Stack != nil
+}
+
+// stackSource says where the stack of a stacked PR comes from (for the approval review)
+func (pr *pullRequestInfo) stackSource() string {
+	if pr.stackInferred {
+		return "Stack source: inferred from the chain of open PRs (GitHub sent no stack metadata)."
+	}
+	return "Stack source: GitHub stack metadata."
 }
 
 // isStackBottom is true when the PR targets the base branch of its stack
@@ -268,9 +286,16 @@ func (pr *pullRequestInfo) author() string {
 	return pr.User.Login
 }
 
-// sameStack is true when other carries stack metadata with the same stack base branch
+// sameStack is true when other carries stack metadata with the same stack base branch.
+// For a stack inferred from the base branches, the other PRs of the chain carry no stack metadata.
 func (pr *pullRequestInfo) sameStack(other *pullRequestInfo) bool {
-	return pr.Stack != nil && other.Stack != nil && pr.Stack.Base.Ref == other.Stack.Base.Ref
+	if pr.Stack == nil {
+		return false
+	}
+	if pr.stackInferred {
+		return other.Stack == nil || other.stackInferred
+	}
+	return other.Stack != nil && pr.Stack.Base.Ref == other.Stack.Base.Ref
 }
 
 // validate refuses what can't be force merged: merged, closed or draft PRs,
@@ -327,9 +352,10 @@ func (g *ForcemergeImpl) fetchPullRequest(ctx context.Context, repo, prNumber st
 
 // repoSettings are the merge methods the repository allows (nil = not told by GitHub)
 type repoSettings struct {
-	AllowMergeCommit *bool `json:"allow_merge_commit"`
-	AllowSquashMerge *bool `json:"allow_squash_merge"`
-	AllowRebaseMerge *bool `json:"allow_rebase_merge"`
+	DefaultBranch    string `json:"default_branch"`
+	AllowMergeCommit *bool  `json:"allow_merge_commit"`
+	AllowSquashMerge *bool  `json:"allow_squash_merge"`
+	AllowRebaseMerge *bool  `json:"allow_rebase_merge"`
 }
 
 func (g *ForcemergeImpl) fetchRepoSettings(ctx context.Context, repo string) (*repoSettings, error) {
@@ -527,6 +553,197 @@ func (g *ForcemergeImpl) fetchUpstack(ctx context.Context, repo string, pr *pull
 	}
 }
 
+func (g *ForcemergeImpl) maxInferredStack() int {
+	if g.maxInferredStackSize > 0 {
+		return g.maxInferredStackSize
+	}
+	return defaultMaxInferredStackSize
+}
+
+func prNumbers(prs []*pullRequestInfo) string {
+	numbers := []string{}
+	for _, p := range prs {
+		numbers = append(numbers, fmt.Sprintf("#%d", p.Number))
+	}
+	return strings.Join(numbers, ", ")
+}
+
+// chainPRBelow returns the open PR of the repository whose head branch is the base branch of pr (nil if none)
+func (g *ForcemergeImpl) chainPRBelow(ctx context.Context, repo string, pr *pullRequestInfo) (*pullRequestInfo, error) {
+	prs, err := g.listOpenPRsWithHead(ctx, repo, pr.Base.Ref)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []*pullRequestInfo{}
+	for _, p := range prs {
+		if p.Head.Ref == pr.Base.Ref {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) > 1 {
+		return nil, fmt.Errorf("%d open PRs (%s) have the head branch %s (below PR #%d): the stack is ambiguous", len(candidates), prNumbers(candidates), pr.Base.Ref, pr.Number)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return candidates[0], nil
+}
+
+// chainPRsAbove returns the open PRs based on the head branch of pr (forks included: they are refused later)
+func (g *ForcemergeImpl) chainPRsAbove(ctx context.Context, repo string, pr *pullRequestInfo) ([]*pullRequestInfo, error) {
+	prs, err := g.listOpenPRsBasedOn(ctx, repo, pr.Head.Ref)
+	if err != nil {
+		return nil, err
+	}
+	res := []*pullRequestInfo{}
+	for _, p := range prs {
+		if p.Base.Ref == pr.Head.Ref {
+			res = append(res, p)
+		}
+	}
+	return res, nil
+}
+
+// checkInferredMember refuses a PR that can't be part of an inferred stack
+func checkInferredMember(repo string, p *pullRequestInfo) error {
+	if err := p.validate(repo); err != nil {
+		return fmt.Errorf("PR #%d of the inferred stack: %v", p.Number, err)
+	}
+	if p.State != "open" {
+		return fmt.Errorf("PR #%d of the inferred stack is not open (state %q)", p.Number, p.State)
+	}
+	if p.Stack != nil {
+		return fmt.Errorf("PR #%d of the inferred stack carries GitHub stack metadata but the PR the force merge was requested on does not: the stack is ambiguous", p.Number)
+	}
+	return nil
+}
+
+/*
+ * inferStack is the fallback when GitHub sends no stack metadata for pr (stack: null). GitHub only
+ * sets it for PRs created with its own stacked pull requests feature, not for a plain chain of PRs
+ * where each PR is based on the head branch of the PR below it.
+ *
+ * The stack is the chain of open PRs of the repository (no fork, no draft) linked by their branches:
+ * - down: the PR whose head branch is the base branch of this PR, repeated until a PR is based on
+ *   the default branch of the repository (the stack base);
+ * - up: the PR based on the head branch of this PR, repeated until no PR is based on it.
+ * A PR with no PR below and none above is not a stack (false): it is merged as usual, whatever its base.
+ * A chain that forks (two open PRs based on the same branch), loops, is longer than the walk limit,
+ * does not reach the default branch, or holds a PR that can't be merged (draft, fork, ...) is refused.
+ *
+ * On success pr.Stack is set (base = default branch, size = length of the chain) and marked inferred:
+ * the stack and direct merges then run as for a GitHub stack.
+ */
+func (g *ForcemergeImpl) inferStack(ctx context.Context, repo string, pr *pullRequestInfo, defaultBranch string, settingsErr error) (bool, error) {
+	if pr.Base.Ref == "" || pr.Head.Ref == "" {
+		// (never produced by GitHub) no branches to chain: merged as usual
+		return false, nil
+	}
+	limit := g.maxInferredStack()
+	unknownDefault := func() error {
+		if settingsErr != nil {
+			return fmt.Errorf("PR #%d is part of a chain of PRs but GitHub sent no stack metadata, and Goliac is unable to read the default branch of the repository to infer the stack: %v", pr.Number, settingsErr)
+		}
+		return fmt.Errorf("PR #%d is part of a chain of PRs but GitHub sent no stack metadata, and Goliac is unable to read the default branch of the repository to infer the stack: GitHub returned none", pr.Number)
+	}
+
+	// walk down to the PR based on the default branch
+	visited := map[int]bool{pr.Number: true}
+	bottom := pr
+	for defaultBranch == "" || bottom.Base.Ref != defaultBranch {
+		next, err := g.chainPRBelow(ctx, repo, bottom)
+		if err != nil {
+			return false, err
+		}
+		if next == nil {
+			break
+		}
+		if defaultBranch == "" {
+			return false, unknownDefault()
+		}
+		if visited[next.Number] {
+			return false, fmt.Errorf("the chain of PR #%d is not linear: PR #%d is reached twice (cycle)", pr.Number, next.Number)
+		}
+		if len(visited) >= limit {
+			return false, fmt.Errorf("the chain of PR #%d has more than %d PRs: too long to infer a stack", pr.Number, limit)
+		}
+		if err := checkInferredMember(repo, next); err != nil {
+			return false, err
+		}
+		visited[next.Number] = true
+		bottom = next
+	}
+
+	if defaultBranch == "" || bottom.Base.Ref != defaultBranch {
+		if bottom == pr {
+			// nothing below: a stack only if a PR is based on this one
+			above, err := g.chainPRsAbove(ctx, repo, pr)
+			if err != nil {
+				return false, err
+			}
+			if len(above) == 0 {
+				return false, nil
+			}
+		}
+		if defaultBranch == "" {
+			return false, unknownDefault()
+		}
+		return false, fmt.Errorf("the chain of PR #%d stops at PR #%d, based on %s: no open PR has this head branch and it is not the default branch %s, so the stack can't be inferred (merge or retarget that PR first)", pr.Number, bottom.Number, bottom.Base.Ref, defaultBranch)
+	}
+
+	// walk up from the bottom: the whole chain, refusing a fork in it at every level
+	chain := []*pullRequestInfo{bottom}
+	seen := map[int]bool{bottom.Number: true}
+	current := bottom
+	for {
+		above, err := g.chainPRsAbove(ctx, repo, current)
+		if err != nil {
+			return false, err
+		}
+		if len(above) == 0 {
+			break
+		}
+		if len(above) > 1 {
+			return false, fmt.Errorf("%d open PRs (%s) are based on branch %s (above PR #%d): the chain forks, the stack is ambiguous", len(above), prNumbers(above), current.Head.Ref, current.Number)
+		}
+		next := above[0]
+		if next.Number == pr.Number {
+			next = pr
+		}
+		if seen[next.Number] {
+			return false, fmt.Errorf("the chain of PR #%d is not linear: PR #%d is reached twice (cycle)", pr.Number, next.Number)
+		}
+		if len(chain) >= limit {
+			return false, fmt.Errorf("the chain of PR #%d has more than %d PRs: too long to infer a stack", pr.Number, limit)
+		}
+		if next != pr {
+			if err := checkInferredMember(repo, next); err != nil {
+				return false, err
+			}
+		}
+		seen[next.Number] = true
+		chain = append(chain, next)
+		current = next
+	}
+	if len(chain) == 1 {
+		// based on the default branch and nothing above: not a stack
+		return false, nil
+	}
+	position := 0
+	for i, p := range chain {
+		if p == pr {
+			position = i + 1
+		}
+	}
+	if position == 0 {
+		return false, fmt.Errorf("PR #%d is not in the chain of PRs found from its base branch: the stack is ambiguous", pr.Number)
+	}
+	pr.Stack = &prStack{Position: position, Size: len(chain)}
+	pr.Stack.Base.Ref = defaultBranch
+	pr.stackInferred = true
+	return true, nil
+}
+
 func forcemergeReviewBody(username string, prNumber int, prTitle, prURL, explanation string) string {
 	return fmt.Sprintf(
 		"Force merge via Goliac on behalf of %s.\n\nPR #%d: %s\n%s\n\n%s",
@@ -597,7 +814,8 @@ func (p *mergePlan) lockedPRs() []*pullRequestInfo {
  *
  * "/squash" in the explanation asks for a squash merge.
  *
- * mergeMode only applies to a PR that is part of a GitHub stack:
+ * mergeMode only applies to a PR that is part of a stack (GitHub's stack metadata, or a stack
+ * inferred from the chain of PRs when GitHub sends none, see inferStack):
  * - "" or "direct": merge this PR only into its base branch, then restack the PRs above it
  * - "stack": merge the whole stack into the stack base branch
  */
@@ -625,9 +843,21 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 
 	plan := &mergePlan{username: username, repo: repo, explanation: explanation, pr: pr, requested: mergeMode, method: method, explicit: explicit}
 
+	var settings *repoSettings
+	var settingsErr error
+	if !pr.isStacked() {
+		settings, settingsErr = g.fetchRepoSettings(ctx, repo)
+		defaultBranch := ""
+		if settingsErr == nil {
+			defaultBranch = settings.DefaultBranch
+		}
+		// GitHub sent no stack: infer one from the chain of PRs (a lone PR is not a stack)
+		if _, err := g.inferStack(ctx, repo, pr, defaultBranch, settingsErr); err != nil {
+			return nil, fmt.Errorf("nothing merged: %v", err)
+		}
+	}
 	if !pr.isStacked() {
 		// the synchronous merge: when GitHub does not tell the allowed methods, "merge" is tried first, then "squash"
-		settings, settingsErr := g.fetchRepoSettings(ctx, repo)
 		if settingsErr == nil {
 			m, err := chooseMergeMethod(settings, method, explicit)
 			if err != nil {
@@ -647,7 +877,9 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 
 	if plan.mode == MergeModeStack || pr.isStackBottom() {
 		// the asynchronous merge fails after the approvals on a method the repository does not allow
-		settings, settingsErr := g.fetchRepoSettings(ctx, repo)
+		if settings == nil {
+			settings, settingsErr = g.fetchRepoSettings(ctx, repo)
+		}
 		if settingsErr != nil {
 			return nil, fmt.Errorf("nothing merged: %v", settingsErr)
 		}
@@ -696,7 +928,11 @@ func (g *ForcemergeImpl) planStack(ctx context.Context, repo string, plan *merge
 		numbers = append(numbers, fmt.Sprintf("#%d", p.Number))
 	}
 	if len(stack) != pr.Stack.Size {
-		return fmt.Errorf("GitHub reports a stack of %d PRs but only %d open PRs were found (%s): a PR in the stack is missing or not open", pr.Stack.Size, len(stack), strings.Join(numbers, " > "))
+		source := "GitHub reports"
+		if pr.stackInferred {
+			source = "the chain of PRs gave" // changed between the inference and this walk
+		}
+		return fmt.Errorf("%s a stack of %d PRs but only %d open PRs were found (%s): a PR in the stack is missing or not open", source, pr.Stack.Size, len(stack), strings.Join(numbers, " > "))
 	}
 	heads := map[string]int{}
 	for i, p := range stack {
@@ -857,6 +1093,8 @@ func describeApprovals(approvals []*approval) string {
 // executePlan approves and merges. It returns a summary of what was merged for a stacked PR.
 func (g *ForcemergeImpl) executePlan(ctx context.Context, plan *mergePlan) (string, error) {
 	switch {
+	case plan.isStack() && plan.pr.stackInferred:
+		return g.mergeInferredStack(ctx, plan)
 	case plan.isStack():
 		return g.mergeWholeStack(ctx, plan)
 	case plan.isDirect():
@@ -871,6 +1109,8 @@ func (g *ForcemergeImpl) mergePlain(ctx context.Context, plan *mergePlan) error 
 	reviewBody := forcemergeReviewBody(plan.username, pr.Number, pr.Title, pr.HTMLURL, plan.explanation)
 	if plan.requested != "" {
 		reviewBody += fmt.Sprintf("\n\nMerge mode `%s` ignored: this PR is not part of a stack.", plan.requested)
+	} else {
+		reviewBody += "\n\nMerge mode: none (this PR is not part of a stack)."
 	}
 	commitTitle := forcemergeCommitTitle(pr.Title, pr.Number, plan.username)
 	commitMessage := forcemergeCommitMessage(plan.username, pr.HTMLURL, pr.Title)
@@ -954,6 +1194,7 @@ func (g *ForcemergeImpl) mergeDirect(ctx context.Context, plan *mergePlan) (stri
 	if !bottom && plan.explicit {
 		reviewBody += " /squash is not available when merging into a parent branch: a merge commit is used instead."
 	}
+	reviewBody += " " + pr.stackSource()
 
 	a, err := g.approvePR(ctx, repo, pr, reviewBody)
 	if err != nil {
@@ -1271,7 +1512,7 @@ func (g *ForcemergeImpl) mergeWholeStack(ctx context.Context, plan *mergePlan) (
 	approvals := []*approval{}
 	for _, p := range stack {
 		review := forcemergeReviewBody(plan.username, p.Number, p.Title, p.HTMLURL, plan.explanation) +
-			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d.", plan.mode, len(stack), top.Number, bottom.Number, pr.Stack.Base.Ref, pr.Number)
+			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d. %s", plan.mode, len(stack), top.Number, bottom.Number, pr.Stack.Base.Ref, pr.Number, pr.stackSource())
 		a, err := g.approvePR(ctx, repo, p, review)
 		if err != nil {
 			return "", g.failAfterApprovals(ctx, repo, approvals, err)
@@ -1308,6 +1549,93 @@ func (g *ForcemergeImpl) mergeWholeStack(ctx context.Context, plan *mergePlan) (
 		return "", fmt.Errorf("the asynchronous merge of the stack succeeded but not every PR is confirmed merged: %s", strings.Join(notMerged, "; "))
 	}
 	return fmt.Sprintf("Force merged (stack) into `%s`: %s", pr.Stack.Base.Ref, summarize(stack)), nil
+}
+
+/*
+ * mergeInferredStack merges a stack inferred from the chain of PRs into the stack base branch (the default branch).
+ * The asynchronous merge API only takes the downstack PRs along "for a stacked pull request", i.e. a PR GitHub
+ * itself considers stacked (non null stack payload). Merging the top PR of a plain chain would merge it alone
+ * into its own base branch. So every PR of the stack is approved, then the PRs are merged one at a time from the
+ * bottom up, each with the asynchronous merge API into the default branch: the next PR is retargeted onto the
+ * default branch only once GitHub confirms the PR below it merged.
+ * On a failure, the PRs already merged stay merged (and listed), and the approvals of the others are dismissed
+ * (left in place when the outcome is unknown).
+ */
+func (g *ForcemergeImpl) mergeInferredStack(ctx context.Context, plan *mergePlan) (string, error) {
+	stack := plan.stack // top to bottom
+	pr := plan.pr
+	repo := plan.repo
+	top := stack[0]
+	bottom := stack[len(stack)-1]
+	base := pr.Stack.Base.Ref
+
+	approvals := map[int]*approval{}
+	created := []*approval{}
+	for _, p := range stack {
+		review := forcemergeReviewBody(plan.username, p.Number, p.Title, p.HTMLURL, plan.explanation) +
+			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d. %s GitHub merges a whole stack in one operation only for its own stacked PRs, so the PRs are merged one at a time from the bottom (#%d) up, each PR being retargeted onto `%s` once the PR below it is merged.", plan.mode, len(stack), top.Number, bottom.Number, base, pr.Number, pr.stackSource(), bottom.Number, base)
+		a, err := g.approvePR(ctx, repo, p, review)
+		if err != nil {
+			return "", g.failAfterApprovals(ctx, repo, created, err)
+		}
+		approvals[p.Number] = a
+		created = append(created, a)
+	}
+
+	if err := g.headsUnchanged(ctx, repo, stack); err != nil {
+		return "", g.failAfterApprovals(ctx, repo, created, err)
+	}
+
+	merged := []*pullRequestInfo{}
+	fail := func(i int, cause error) error {
+		// the PRs not merged yet: stack[0..i]
+		pending := []*approval{}
+		notMerged := []*pullRequestInfo{}
+		for j := 0; j <= i; j++ {
+			pending = append(pending, approvals[stack[j].Number])
+			notMerged = append(notMerged, stack[j])
+		}
+		done := "none"
+		if len(merged) > 0 {
+			done = prNumbers(merged)
+		}
+		// not merged: bottom-up order, like the merges
+		for l, r := 0, len(notMerged)-1; l < r; l, r = l+1, r-1 {
+			notMerged[l], notMerged[r] = notMerged[r], notMerged[l]
+		}
+		return g.failAfterApprovals(ctx, repo, pending, fmt.Errorf("%w; already merged into `%s`: %s; not merged: %s", cause, base, done, prNumbers(notMerged)))
+	}
+
+	for i := len(stack) - 1; i >= 0; i-- {
+		p := stack[i]
+		if len(merged) > 0 {
+			// the PR below is merged (and based on the stack base): retarget this one onto the stack base
+			below := *merged[len(merged)-1]
+			below.Base.Ref = base
+			if _, err := g.restack(ctx, repo, &below, []*pullRequestInfo{p}); err != nil {
+				return "", fail(i, err)
+			}
+		}
+		err := g.mergePRAsync(
+			ctx,
+			repo,
+			p.Number,
+			p.Head.Sha,
+			forcemergeCommitTitle(p.Title, p.Number, plan.username),
+			forcemergeCommitMessage(plan.username, p.HTMLURL, p.Title)+fmt.Sprintf("\n\n%s", forcemergeStackCommitMessage(plan.username, pr.Number, stack)),
+			plan.method,
+			plan.explicit,
+		)
+		if err == nil {
+			// nothing is retargeted before GitHub says merged:true
+			err = g.confirmMerged(ctx, repo, p.Number)
+		}
+		if err != nil {
+			return "", fail(i, err)
+		}
+		merged = append(merged, p)
+	}
+	return fmt.Sprintf("Force merged (stack) into `%s`: %s", base, summarize(stack)), nil
 }
 
 func (g *ForcemergeImpl) mergePRSync(ctx context.Context, repo, prNumber, commitTitle, commitMessage, mergeMethod string) ([]byte, error) {
