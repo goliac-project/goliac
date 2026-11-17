@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/goliac-project/goliac/internal/config"
 )
@@ -30,6 +32,14 @@ type SlackMessage struct {
 	Text    string `json:"text"`
 }
 
+// slackEscape escapes the characters Slack interprets in a message (https://api.slack.com/reference/surfaces/formatting#escaping):
+// "&", "<" and ">" (a "<!channel>" or "<https://evil|link>" written in an explanation must not become a mention or a link)
+func slackEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	return strings.ReplaceAll(s, ">", "&gt;")
+}
+
 func (f *StepPluginSlack) Execute(ctx context.Context, username, workflowDescription, explanation string, url *url.URL, properties map[string]interface{}) (string, error) {
 	channel := f.Channel
 	if properties["channel"] != nil {
@@ -40,7 +50,7 @@ func (f *StepPluginSlack) Execute(ctx context.Context, username, workflowDescrip
 	if url != nil {
 		urlpath = "(" + url.Path + ")"
 	}
-	message := fmt.Sprintf("Workflow %s %s was submited by %s with explanation: %s", workflowDescription, urlpath, username, explanation)
+	message := fmt.Sprintf("Workflow %s %s was submited by %s with explanation: %s", slackEscape(workflowDescription), slackEscape(urlpath), slackEscape(username), slackEscape(explanation))
 	// Prepare the message payload
 	msg := SlackMessage{
 		Channel: channel,
@@ -64,7 +74,7 @@ func (f *StepPluginSlack) Execute(ctx context.Context, username, workflowDescrip
 	req.Header.Set("Authorization", "Bearer "+f.SlackToken)
 
 	// Make the HTTP request
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to send request: %v", err)

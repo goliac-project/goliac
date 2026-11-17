@@ -32,10 +32,28 @@ func TestForcemergeF1PlainMergeIsPinned(t *testing.T) {
 		assert.Equal(t, []string{"aaa111"}, gh.syncMergedHeads)
 	})
 
-	t.Run("pushed between the validation and the approval: nothing merged, approval dismissed", func(t *testing.T) {
+	t.Run("pushed between the validation and the approval: GitHub refuses to approve the stale commit, nothing merged", func(t *testing.T) {
 		gh := plainFake(t)
 		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
 			if call.Method == "POST" && strings.HasSuffix(call.Endpoint, "/reviews") {
+				f.update(32, func(p *fakePR) { p.HeadSha = "bbb222" })
+			}
+			return nil, nil
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 32, "because", "")
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "error approving the PR #32")
+		assert.Empty(t, gh.find("PUT", "/pulls/32/merge"))
+	})
+
+	t.Run("pushed between the approval and the re-check: nothing merged, approval dismissed", func(t *testing.T) {
+		gh := plainFake(t)
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			f.mu.Lock()
+			approved := len(f.reviews) > 0
+			f.mu.Unlock()
+			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls/32" && approved {
 				f.update(32, func(p *fakePR) { p.HeadSha = "bbb222" })
 			}
 			return nil, nil
@@ -259,7 +277,7 @@ func TestForcemergeF4AsyncConflict(t *testing.T) {
 	}{
 		{"a pending request (uuid)", `{"status":"pending","details":{"message":"already requested","uuid":"abc"}}`, true},
 		{"the head changed", `{"message":"Head branch was modified. Review and try the merge again."}`, false},
-		{"a sha mismatch", `{"message":"expected_head_sha does not match the head sha"}`, false},
+		{"an undocumented sha body stays indeterminate (only the documented head message is definite)", `{"message":"expected_head_sha does not match the head sha"}`, true},
 		{"an unknown body: the docs only say 409 means a pending request, so it stays indeterminate", `{"message":"conflict"}`, true},
 		{"no body", ``, true},
 	}
@@ -466,5 +484,232 @@ func TestForcemergeSquashAdviceFitsTheStack(t *testing.T) {
 		_, err := mergePR(fc, 3, "because", MergeModeStack)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "from the top down with the direct mode")
+	})
+}
+
+// live (2026-11-17, phoenix-tooling): after the bottom PR of a GitHub stack of 3 is merged, the two others still say size 3
+// (positions 2 and 3), the merged PR keeps its stack
+func fixtureStackBottomMerged() map[int]*fakePR {
+	prs := fixtureStack()
+	prs[4].Merged, prs[4].State = true, "closed"
+	prs[3].BaseRef = "main"
+	return prs
+}
+
+func TestForcemergeR7PartlyMergedGithubStack(t *testing.T) {
+	t.Run("stack mode on a stack whose bottom PR is already merged: the size counts the merged PR", func(t *testing.T) {
+		for _, from := range []int{1, 2, 3} {
+			gh := newFake(t, fixtureStackBottomMerged()).allMethods()
+			gh.asyncMerge = okJSON(asyncMerged)
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, from, "because", MergeModeStack)
+			assert.Nil(t, err, "from PR %d", from)
+			assert.Equal(t, []string{"1", "2", "3"}, gh.reviewedPRs())
+			for _, n := range []int{1, 2, 3} {
+				assert.True(t, gh.pr(n).Merged, "PR %d", n)
+			}
+		}
+	})
+
+	t.Run("two PRs merged below: the position of the bottom open PR tells", func(t *testing.T) {
+		prs := fixtureStackBottomMerged()
+		prs[3].Merged, prs[3].State = true, "closed"
+		prs[2].BaseRef = "main"
+		gh := newFake(t, prs).allMethods()
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 1, "because", MergeModeStack)
+		assert.Nil(t, err)
+		assert.Equal(t, []string{"1", "2"}, gh.reviewedPRs())
+	})
+
+	t.Run("a PR missing inside a partly merged stack is still refused", func(t *testing.T) {
+		prs := fixtureStackBottomMerged()
+		prs[2].State = "closed"
+		gh := newFake(t, prs).allMethods()
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 3, "because", MergeModeStack)
+		assert.NotNil(t, err)
+		assert.Empty(t, gh.sideEffects())
+	})
+
+	t.Run("direct on the new bottom PR of a partly merged stack", func(t *testing.T) {
+		gh := newFake(t, fixtureStackBottomMerged()).allMethods()
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 3, "because", "")
+		assert.Nil(t, err)
+		assert.True(t, gh.pr(3).Merged)
+	})
+}
+
+func TestForcemergeAStrayPRsAboveInDirectMode(t *testing.T) {
+	chain := func() map[int]*fakePR {
+		prs := fixturePlainChain() // 59 > 58 > 57 > main
+		prs[60] = &fakePR{Number: 60, Title: "t3 bis", Author: "a60", BaseRef: "t2", HeadRef: "t3bis", HeadSha: "sha60", State: "open"}
+		prs[61] = &fakePR{Number: 61, Title: "wip", Author: "a61", BaseRef: "t2", HeadRef: "wip", HeadSha: "sha61", State: "open", Draft: true}
+		prs[62] = &fakePR{Number: 62, Title: "fork", Author: "a62", BaseRef: "t2", HeadRef: "forkbranch", HeadSha: "sha62", State: "open", HeadRepo: "someone/goliac"}
+		return prs
+	}
+
+	for _, mode := range []string{"", MergeModeDirect} {
+		t.Run(fmt.Sprintf("direct (mode %q) on PR 58: merged, every valid PR above (59, 60) retargeted, the draft and the fork left untouched and named", mode), func(t *testing.T) {
+			gh := newFake(t, chain()).allMethods()
+			gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+			gh.markMergedOnBranchMerge = true
+			fc, _ := newForcemergeForTest(t, gh)
+			summary, err := mergePR(fc, 58, "because", mode)
+			assert.Nil(t, err)
+			assert.True(t, gh.pr(58).Merged)
+			assert.Equal(t, "t1", gh.pr(59).BaseRef)
+			assert.Equal(t, "t1", gh.pr(60).BaseRef)
+			assert.Equal(t, "t2", gh.pr(61).BaseRef, "the draft is not touched")
+			assert.Equal(t, "t2", gh.pr(62).BaseRef, "the fork PR is not touched")
+			assert.Contains(t, summary, "retargeted onto `t1`: #59, #60")
+			assert.Contains(t, summary, "left untouched (not retargeted): #61 (draft), #62 (from a fork)")
+			review := firstCall(gh.find("POST", "/reviews")).Body["body"].(string)
+			assert.Contains(t, review, "PRs above that are left untouched (not retargeted): #61 (draft), #62 (from a fork)")
+		})
+	}
+
+	t.Run("direct on the bottom PR 57: same", func(t *testing.T) {
+		gh := newFake(t, chain()).allMethods()
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 57, "because", "")
+		assert.Nil(t, err)
+		assert.Equal(t, "main", gh.pr(58).BaseRef)
+		assert.Equal(t, "t2", gh.pr(59).BaseRef, "PRs above the PR above are not touched")
+		assert.NotContains(t, summary, "#61", "the draft and the fork are above PR 58, not above PR 57")
+	})
+
+	t.Run("only stray PRs above: the PR is merged as a lone PR and they are named", func(t *testing.T) {
+		prs := map[int]*fakePR{
+			57: {Number: 57, Title: "t1", Author: "a57", BaseRef: "main", HeadRef: "t1", HeadSha: "sha57", State: "open"},
+			61: {Number: 61, Title: "wip", BaseRef: "t1", HeadRef: "wip", HeadSha: "sha61", State: "open", Draft: true},
+		}
+		gh := newFake(t, prs).allMethods()
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 57, "because", "")
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/57/merge")))
+		assert.Contains(t, summary, "#61 (draft)")
+		assert.Contains(t, firstCall(gh.find("POST", "/reviews")).Body["body"], "#61 (draft)")
+	})
+
+	t.Run("stack mode keeps refusing a draft, a fork PR or several PRs above", func(t *testing.T) {
+		for _, n := range []int{60, 61, 62} {
+			prs := fixturePlainChain()
+			prs[n] = chain()[n]
+			gh := newFake(t, prs).allMethods()
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, 58, "because", MergeModeStack)
+			assert.NotNil(t, err, "PR %d above", n)
+			assert.Empty(t, gh.sideEffects())
+		}
+	})
+
+	t.Run("an irregular PR BELOW the requested PR is still refused in direct mode", func(t *testing.T) {
+		for name, mutate := range map[string]func(p *fakePR){
+			"draft": func(p *fakePR) { p.Draft = true },
+			"fork":  func(p *fakePR) { p.HeadRepo = "someone/goliac" },
+		} {
+			prs := fixturePlainChain()
+			mutate(prs[57])
+			gh := newFake(t, prs).allMethods()
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, 58, "because", "")
+			assert.NotNil(t, err, name)
+			assert.Empty(t, gh.sideEffects(), name)
+		}
+	})
+
+	t.Run("a PR stacked on top between the plan and the merge: valid ones retargeted, strays named", func(t *testing.T) {
+		gh := newFake(t, fixturePlainChain()).allMethods()
+		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+		gh.markMergedOnBranchMerge = true
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			if call.Method == "POST" && call.Endpoint == "/repos/myorg/goliac/merges" {
+				f.mu.Lock()
+				f.prs[70] = &fakePR{Number: 70, Title: "late", BaseRef: "t2", HeadRef: "late", HeadSha: "sha70", State: "open"}
+				f.prs[71] = &fakePR{Number: 71, Title: "late draft", BaseRef: "t2", HeadRef: "late2", HeadSha: "sha71", State: "open", Draft: true}
+				f.mu.Unlock()
+			}
+			return nil, nil
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 58, "because", "")
+		assert.Nil(t, err)
+		assert.Equal(t, "t1", gh.pr(70).BaseRef)
+		assert.Equal(t, "t2", gh.pr(71).BaseRef)
+		assert.Contains(t, summary, "#71 (draft)")
+	})
+}
+
+func TestForcemergeBProtectedBranchesAreNeverDead(t *testing.T) {
+	deadBranch := func() map[int]*fakePR {
+		return map[int]*fakePR{
+			10: {Number: 10, Title: "release", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "tip", State: "closed", Merged: true},
+			11: {Number: 11, Title: "hotfix", Author: "a11", BaseRef: "release/1.0", HeadRef: "hotfix", HeadSha: "sha11", State: "open"},
+		}
+	}
+	run := func(setup func(gh *fakeGitHub)) (error, *fakeGitHub) {
+		gh := newFake(t, deadBranch()).allMethods()
+		gh.branchTips = map[string]string{"release/1.0": "tip"} // unchanged since the merge of PR 10
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		setup(gh)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 11, "hotfix", "")
+		return err, gh
+	}
+
+	t.Run("unprotected: dead, refused", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {})
+		assert.NotNil(t, err)
+		assert.Empty(t, gh.sideEffects())
+	})
+	t.Run("covered by classic branch protection: merged", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) { gh.branchProtected = map[string]bool{"release/1.0": true} })
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/11/merge")))
+		assert.Empty(t, gh.find("GET", "/rules/branches/release%2F1.0"), "no need to look at the rulesets")
+	})
+	t.Run("covered by a ruleset only (the branch is not 'protected'): merged", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) { gh.branchRules = map[string]int{"release/1.0": 2} })
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/11/merge")))
+		assert.Equal(t, 1, len(gh.find("GET", "/rules/branches/release%2F1.0")))
+	})
+	t.Run("a failing rules lookup refuses", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+				if strings.Contains(call.Endpoint, "/rules/branches/") {
+					return httpError("500 Internal Server Error", `{}`)
+				}
+				return nil, nil
+			}
+		})
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "error reading the rules that apply to the branch release/1.0")
+		assert.Empty(t, gh.sideEffects())
+	})
+	t.Run("an unreadable rules answer refuses", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+				if strings.Contains(call.Endpoint, "/rules/branches/") {
+					return []byte(`not json`), nil
+				}
+				return nil, nil
+			}
+		})
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "error parsing the rules")
+		assert.Empty(t, gh.sideEffects())
+	})
+	t.Run("a branch that moved on is alive without any lookup of the rules", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) { gh.branchTips["release/1.0"] = "moved" })
+		assert.Nil(t, err)
+		assert.Empty(t, gh.find("GET", "/rules/branches/release%2F1.0"))
 	})
 }

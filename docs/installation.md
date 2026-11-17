@@ -285,7 +285,8 @@ You can run the goliac server as a service or a docker container. It needs sever
 | GOLIAC_WORKFLOW_JIRA_ATLASSIAN_DOMAIN |      | PR Breaking glass workflow - Jira plugin: company domain  |
 | GOLIAC_WORKFLOW_JIRA_EMAIL   |               | PR Breaking glass workflow - Jira plugin: email |
 | GOLIAC_WORKFLOW_JIRA_API_TOKEN |             | PR Breaking glass workflow - Jira plugin: token |
-| GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS | 60 | PR Breaking glass workflow: how long to wait for GitHub to do its part after a merge (retarget of a GitHub stack, PR marked merged) |
+| GOLIAC_WORKFLOW_FORCEMERGE_TIMEOUT_SECONDS | 600 | PR Breaking glass workflow: deadline of a whole force merge (must be positive, otherwise Goliac refuses to start) |
+| GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS | 60 | PR Breaking glass workflow: how long to wait for GitHub to do its part after a merge (retarget of a GitHub stack, PR marked merged); must be positive, otherwise Goliac refuses to start |
 
 Feature toggles for GitHub Actions environments/variables, repository autolinks, and organization custom properties are configured in `goliac.yaml` under `features` (since v1.8.0), not via environment variables.
 

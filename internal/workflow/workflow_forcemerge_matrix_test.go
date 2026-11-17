@@ -280,7 +280,12 @@ func TestForcemergeSlashBranchNames(t *testing.T) {
 					paths = append(paths, c.Endpoint)
 				}
 			}
-			assert.Equal(t, []string{"/repos/myorg/goliac/branches/" + url.PathEscape(tc.base)}, paths)
+			expected := []string{"/repos/myorg/goliac/branches/" + url.PathEscape(tc.base)}
+			if tc.refused {
+				// the tip is unchanged: the rules that apply to the branch are looked up too (escaped path)
+				expected = append(expected, "/repos/myorg/goliac/rules/branches/"+url.PathEscape(tc.base))
+			}
+			assert.Equal(t, expected, paths)
 		}
 	})
 }

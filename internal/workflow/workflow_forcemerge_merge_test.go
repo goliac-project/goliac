@@ -666,7 +666,10 @@ func TestForcemergeMergePRDirect(t *testing.T) {
 		gh := newFake(t, fixtureStackPlain()).allMethods()
 		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
 		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
-			if call.Method == "POST" && strings.HasSuffix(call.Endpoint, "/reviews") {
+			f.mu.Lock()
+			approved := len(f.reviews) > 0
+			f.mu.Unlock()
+			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls/3" && approved {
 				f.update(3, func(p *fakePR) { p.HeadSha = "pushed" })
 			}
 			return nil, nil
@@ -1074,7 +1077,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		gh := newFake(t, fixtureStack()).allMethods()
 		gh.asyncMerge = okJSON(asyncMerged)
 		fc, _ := newForcemergeForTest(t, gh)
-		err := fc.mergePRAsync(context.Background(), "goliac", 1, "sha1", "t", "m", "merge", false)
+		err := fc.mergePRAsync(context.Background(), "goliac", 1, "sha1", "t", "m", "merge", false, true)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "GitHub says: Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack.")
 	})
@@ -1126,7 +1129,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		assertNothingChanged(t, gh)
 	})
 
-	t.Run("async 'merge' refused as not allowed: squash fallback like the sync path", func(t *testing.T) {
+	t.Run("async 'merge' refused as not allowed on the bottom PR: no squash fallback while PRs remain above (R4)", func(t *testing.T) {
 		gh := newFake(t, fixtureStack()).allMethods() // settings lie: the repository refuses merge commits
 		gh.asyncMerge = func(call restCall) ([]byte, error) {
 			if call.Body["merge_method"] == "merge" {
@@ -1136,9 +1139,25 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		}
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "not downgraded to a squash merge: PRs remain open above PR #4")
+		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")), "no squash attempt")
+		assert.Equal(t, 4, len(gh.find("PUT", "/dismissals")))
+	})
+
+	t.Run("async 'merge' refused on the top PR only: squash fallback (nothing remains above it)", func(t *testing.T) {
+		gh := newFake(t, fixtureStack()).allMethods()
+		gh.asyncMerge = func(call restCall) ([]byte, error) {
+			if call.Body["merge_method"] == "merge" && strings.Contains(call.Endpoint, "/pulls/1/") {
+				return httpError("405 Method Not Allowed", `{"message":"Merge commits are not allowed on this repository."}`)
+			}
+			return []byte(asyncMerged), nil
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
 		assert.Nil(t, err)
-		calls := gh.find("PUT", "/merge-async")
-		assert.Equal(t, 8, len(calls), "each of the 4 PRs: merge refused, then squash")
+		calls := gh.find("PUT", "/pulls/1/merge-async")
+		assert.Equal(t, 2, len(calls))
 		assert.Equal(t, "squash", calls[1].Body["merge_method"])
 	})
 
@@ -1151,7 +1170,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 			return []byte(asyncMerged), nil
 		}
 		fc, _ := newForcemergeForTest(t, gh)
-		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
+		err := fc.mergePRAsync(context.Background(), "goliac", 4, "sha4", "t", "m", "merge", false, true)
 		assert.Nil(t, err)
 
 		gh2 := newFake(t, fixtureStack()).allMethods()
@@ -1179,7 +1198,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 			return httpError("405 Method Not Allowed", `{"message":"Squash merges are not allowed on this repository."}`)
 		}
 		fc, _ := newForcemergeForTest(t, gh)
-		err := fc.mergePRAsync(context.Background(), "goliac", 4, "sha4", "t", "m", "squash", true)
+		err := fc.mergePRAsync(context.Background(), "goliac", 4, "sha4", "t", "m", "squash", true, true)
 		assert.NotNil(t, err)
 		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")))
 	})
@@ -1192,7 +1211,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), "nothing merged: GitHub reports a stack of 4 PRs but only 2 open PRs were found (#3 > #4)")
+		assert.Contains(t, err.Error(), "nothing merged: GitHub reports a stack of 4 PRs (4 open) but only 2 open PRs were found (#3 > #4)")
 		assert.Equal(t, 0, len(gh.sideEffects()))
 	})
 
@@ -1412,8 +1431,9 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "timeout after 20s waiting for the asynchronous merge (request uuid-1)")
-		assert.Contains(t, err.Error(), "left in place: PR #1 (review 1001), PR #2")
-		assert.Equal(t, 0, len(gh.find("PUT", "/dismissals")))
+		assert.Contains(t, err.Error(), "outcome unknown (it may be merged): #4; not merged: #3, #2, #1")
+		assert.Contains(t, err.Error(), "the approval of PR #4 is left in place: PR #4 (review 1004)")
+		assert.Equal(t, 3, len(gh.find("PUT", "/dismissals")), "the PRs never tried are dismissed")
 		assert.GreaterOrEqual(t, len(clock.slept()), 19)
 	})
 
@@ -1437,7 +1457,11 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), "not merged: #4, #3, #2, #1")
+		// R2: PR 4 was reported merged but never confirmed: its outcome is unknown, only the PRs after it were not merged
+		assert.Contains(t, err.Error(), "already merged into `main`: none; outcome unknown (it may be merged): #4; not merged: #3, #2, #1")
+		assert.NotContains(t, err.Error(), "not merged: #4")
+		assert.Contains(t, err.Error(), "the approval of PR #4 is left in place")
+		assert.Equal(t, 3, len(gh.find("PUT", "/dismissals")), "the approvals of the PRs that were never tried are dismissed, PR 4's is kept")
 	})
 }
 

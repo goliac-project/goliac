@@ -19,12 +19,17 @@ type recordingPlugin struct {
 	err  error
 	// empty: the step has nothing to report (an audit step, for instance)
 	empty bool
+	// failOn: the call number (1 based) that fails (0 = never)
+	failOn int
 }
 
 func (p *recordingPlugin) Execute(ctx context.Context, username, workflowDescription, explanation string, u *url.URL, properties map[string]interface{}) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.urls = append(p.urls, u.String())
+	if p.failOn > 0 && len(p.urls) == p.failOn {
+		return "", fmt.Errorf("slack is down")
+	}
 	if p.err != nil {
 		return "", p.err
 	}

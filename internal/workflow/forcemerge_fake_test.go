@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -108,6 +109,13 @@ func (p *fakePR) headLabel() string {
 	return strings.SplitN(p.HeadRepo, "/", 2)[0] + ":" + p.HeadRef
 }
 
+type fakeReview struct {
+	ID    int64
+	PR    int
+	State string
+	Body  string
+}
+
 // fakeClock is a manual clock: Sleep advances the time, nothing really sleeps
 type fakeClock struct {
 	mu     sync.Mutex
@@ -185,9 +193,18 @@ type fakeGitHub struct {
 
 	// branchTips: tip sha of the branches (GET /branches/{b}); a missing branch answers 404
 	branchTips map[string]string
+	// branchProtected: classic branch protection; branchRules: number of ruleset rules that apply to the branch
+	branchProtected map[string]bool
+	branchRules     map[string]int
 
 	// head sha of the PRs at the time of each synchronous merge (what GitHub really merges)
 	syncMergedHeads []string
+
+	// reviews created by the force merge, and the failures to inject on the approval request of a PR
+	reviews            []fakeReview
+	reviewResponseLost map[int]bool // PR number -> the review is created but the answer is lost (transport error)
+	reviewFails        map[int]int  // PR number -> number of 503 answers (review not created) before it works
+	ctxDeadlines       []time.Duration
 
 	reviewSeq  int64
 	violations []string
@@ -347,8 +364,17 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		f.mu.Lock()
+		f.ctxDeadlines = append(f.ctxDeadlines, time.Until(dl))
+		f.mu.Unlock()
+	}
 	if onCall != nil {
-		if res, err := onCall(f, call); err != nil || res != nil {
+		res, err := onCall(f, call)
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr // the request outlived its context
+		}
+		if err != nil || res != nil {
 			return res, err
 		}
 	}
@@ -475,16 +501,77 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		if strings.Contains(rest, "/") || uerr != nil || !ok {
 			return httpError("404 Not Found", `{"message":"Branch not found"}`)
 		}
-		return []byte(fmt.Sprintf(`{"commit":{"sha":%q}}`, tip)), nil
+		return []byte(fmt.Sprintf(`{"protected":%v,"commit":{"sha":%q}}`, f.branchProtected[name], tip)), nil
+
+	case method == "GET" && strings.HasPrefix(endpoint, "/repos/myorg/goliac/rules/branches/"):
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		rest := strings.TrimPrefix(endpoint, "/repos/myorg/goliac/rules/branches/")
+		name, uerr := url.PathUnescape(rest)
+		if strings.Contains(rest, "/") || uerr != nil {
+			return httpError("404 Not Found", `{"message":"Not Found"}`)
+		}
+		rules := []map[string]interface{}{}
+		for i := 0; i < f.branchRules[name]; i++ {
+			rules = append(rules, map[string]interface{}{"type": "pull_request", "ruleset_id": i + 1})
+		}
+		return json.Marshal(rules)
 
 	case method == "POST" && reviewEndpoint.MatchString(endpoint):
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		n, _ := strconv.Atoi(reviewEndpoint.FindStringSubmatch(endpoint)[1])
+		pr := f.prs[n]
+		if pr == nil {
+			return httpError("404 Not Found", `{"message":"Not Found"}`)
+		}
+		if sha, ok := body["commit_id"].(string); ok && sha != pr.HeadSha {
+			// live behaviour of GitHub: a commit that is not in the PR is refused
+			return httpError("422 Unprocessable Entity", `{"message":"Unprocessable Entity","errors":["Review commit_id is not part of the pull request"]}`)
+		}
 		f.reviewSeq++
-		return []byte(fmt.Sprintf(`{"id":%d,"state":"APPROVED"}`, 1000+f.reviewSeq)), nil
+		id := 1000 + f.reviewSeq
+		text, _ := body["body"].(string)
+		f.reviews = append(f.reviews, fakeReview{ID: id, PR: n, State: "APPROVED", Body: text})
+		if f.reviewResponseLost[n] {
+			// the review was created but the answer never came back
+			return nil, errors.New("read tcp: connection reset by peer")
+		}
+		if f.reviewFails[n] > 0 {
+			f.reviewFails[n]--
+			f.reviews = f.reviews[:len(f.reviews)-1]
+			return httpError("503 Service Unavailable", ``)
+		}
+		return []byte(fmt.Sprintf(`{"id":%d,"state":"APPROVED"}`, id)), nil
+
+	case method == "GET" && reviewEndpoint.MatchString(endpoint):
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		n, _ := strconv.Atoi(reviewEndpoint.FindStringSubmatch(endpoint)[1])
+		if f.prs[n] == nil {
+			return httpError("404 Not Found", `{"message":"Not Found"}`)
+		}
+		res := []map[string]interface{}{}
+		for _, r := range f.reviews {
+			if r.PR == n {
+				res = append(res, map[string]interface{}{"id": r.ID, "state": r.State, "body": r.Body})
+			}
+		}
+		return json.Marshal(res)
 
 	case method == "PUT" && dismissal.MatchString(endpoint):
-		return []byte(`{}`), nil
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		m := dismissal.FindStringSubmatch(endpoint)
+		n, _ := strconv.Atoi(m[1])
+		id, _ := strconv.ParseInt(m[2], 10, 64)
+		for i := range f.reviews {
+			if f.reviews[i].ID == id && f.reviews[i].PR == n {
+				f.reviews[i].State = "DISMISSED"
+				return []byte(`{}`), nil
+			}
+		}
+		return httpError("404 Not Found", `{"message":"Not Found"}`)
 
 	case method == "POST" && commentPath.MatchString(endpoint):
 		return []byte(`{}`), nil

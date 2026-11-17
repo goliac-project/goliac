@@ -184,7 +184,7 @@ func TestForcemergeInferredStack(t *testing.T) {
 		assert.Equal(t, 2, len(gh.find("PUT", "/merge-async")), "#59 is never tried")
 	})
 
-	t.Run("stack mode, a merge times out: indeterminate, the remaining approvals are left in place", func(t *testing.T) {
+	t.Run("stack mode, a merge times out: indeterminate, the approval of the PR with an unknown outcome is left in place", func(t *testing.T) {
 		gh := newFake(t, fixturePlainChain()).allMethods()
 		gh.asyncMerge = func(call restCall) ([]byte, error) {
 			if strings.Contains(call.Endpoint, "/57/") {
@@ -198,7 +198,8 @@ func TestForcemergeInferredStack(t *testing.T) {
 		_, err := mergePR(fc, 58, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "left in place")
-		assert.Equal(t, 0, len(gh.find("PUT", "/dismissals")))
+		assert.Contains(t, err.Error(), "outcome unknown (it may be merged): #57; not merged: #58, #59")
+		assert.Equal(t, 2, len(gh.find("PUT", "/dismissals")), "#58 and #59 were never tried: dismissed; #57 (unknown) is kept")
 		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")))
 		assert.Equal(t, 0, len(gh.find("PATCH", "")))
 	})
@@ -454,13 +455,13 @@ func TestForcemergeInferredStack(t *testing.T) {
 			from: 59, mode: MergeModeStack,
 			message: "2 open PRs (#58, #60) are based on branch t1 (above PR #57): the chain forks, the stack is ambiguous",
 		},
-		"a fork in the chain, direct mode": {
+		"a fork in the chain below the requested PR, direct mode": {
 			prs: func() map[int]*fakePR {
 				prs := fixturePlainChain()
-				prs[60] = &fakePR{Number: 60, Title: "t3b", BaseRef: "t2", HeadRef: "t3b", HeadSha: "sha60", State: "open"}
+				prs[60] = &fakePR{Number: 60, Title: "t2b", BaseRef: "t1", HeadRef: "t2b", HeadSha: "sha60", State: "open"}
 				return prs
 			},
-			from: 58, mode: "",
+			from: 59, mode: "",
 			message: "the chain forks",
 		},
 		"a cycle": {
@@ -500,13 +501,13 @@ func TestForcemergeInferredStack(t *testing.T) {
 			from: 58, mode: MergeModeStack,
 			message: "PR #57 of the inferred stack: PR #57 is a draft",
 		},
-		"a draft above the requested PR, direct mode": {
+		"a draft above the requested PR, stack mode": {
 			prs: func() map[int]*fakePR {
 				prs := fixturePlainChain()
 				prs[59].Draft = true
 				return prs
 			},
-			from: 58, mode: "",
+			from: 58, mode: MergeModeStack,
 			message: "PR #59 of the inferred stack: PR #59 is a draft",
 		},
 		"a fork-repository head in the chain": {

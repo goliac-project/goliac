@@ -257,7 +257,8 @@ func TestAdvAsyncLifecycle(t *testing.T) {
 		_, err := mergePR(fc, 4, "because", MergeModeStack)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "timeout after 10s")
-		assert.Empty(t, dismissed(a))
+		// R2: PR 4's outcome is unknown (its approval is left), the PRs after it were never tried (dismissed)
+		assert.ElementsMatch(t, []string{"1", "2", "3"}, dismissed(a))
 		assert.Equal(t, 0, a.count("PATCH", "/pulls/3"))
 		assert.Equal(t, 1, a.count("PUT", "/merge-async"))
 		total := time.Duration(0)
@@ -273,7 +274,7 @@ func TestAdvAsyncLifecycle(t *testing.T) {
 		fc, _ := newAdvFC(t, a)
 		_, err := mergePR(fc, 4, "because", MergeModeStack)
 		assert.NotNil(t, err)
-		assert.Empty(t, dismissed(a))
+		assert.ElementsMatch(t, []string{"1", "2", "3"}, dismissed(a), "PR 4's approval is left (it is queued), the others were never tried")
 		assert.Empty(t, a.mergedInto())
 		assert.Equal(t, 0, a.count("PATCH", ""))
 	})
@@ -286,7 +287,7 @@ func TestAdvAsyncLifecycle(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, 0, a.count("PATCH", ""))
 		assert.Equal(t, 1, a.count("PUT", "/merge-async"))
-		assert.Empty(t, dismissed(a))
+		assert.ElementsMatch(t, []string{"1", "2", "3"}, dismissed(a))
 	})
 }
 
@@ -356,10 +357,20 @@ func TestAdvHeadPushedOnEveryPROfAStack(t *testing.T) {
 					_, err := mergePR(fc, 2, "because", MergeModeStack)
 					assert.NotNil(t, err, phase)
 					assert.True(t, pushed, phase)
-					assert.Contains(t, err.Error(), fmt.Sprintf("PR #%d was pushed to after the approval", k), phase)
+					if phase == "before-review" {
+						// GitHub refuses to approve a commit that is not the head of the PR (422): the approvals created before are dismissed
+						assert.Contains(t, err.Error(), fmt.Sprintf("error approving the PR #%d", k), phase)
+						expected := []string{}
+						for j := 1; j < k; j++ {
+							expected = append(expected, fmt.Sprint(j))
+						}
+						assert.ElementsMatch(t, expected, dismissed(a), phase)
+					} else {
+						assert.Contains(t, err.Error(), fmt.Sprintf("PR #%d was pushed to after the approval", k), phase)
+						assert.ElementsMatch(t, []string{"1", "2", "3", "4"}, dismissed(a), phase)
+					}
 					assert.Equal(t, 0, a.count("PUT", "/merge-async"), phase)
 					assert.Equal(t, 0, a.count("PATCH", ""), phase)
-					assert.ElementsMatch(t, []string{"1", "2", "3", "4"}, dismissed(a), phase)
 					assert.Empty(t, a.mergedInto(), phase)
 				}
 			})
@@ -827,12 +838,17 @@ func TestAdvChainLength(t *testing.T) {
 			assert.Equal(t, "main", a.mergedInto()[n])
 		}
 	})
-	t.Run("a chain of 51 is refused whatever the PR, with no side effect", func(t *testing.T) {
+	t.Run("a chain of 51 is refused in stack mode whatever the PR, and in direct mode from the top PR (the walk down), with no side effect", func(t *testing.T) {
 		for _, from := range []int{1, 2, 25, 50, 51} {
 			for _, mode := range []string{"", MergeModeStack} {
 				a := newAdv(t, chainFixture(51, "main", "h%d"))
 				fc, _ := newAdvFC(t, a)
 				_, err := mergePR(fc, from, "because", mode)
+				if mode == "" && from != 51 {
+					// default/direct mode only walks down from the PR (what is above it is not part of the question)
+					assert.Nil(t, err, "PR %d of 51, mode %q", from, mode)
+					continue
+				}
 				assert.NotNil(t, err, "PR %d of 51, mode %q", from, mode)
 				if err != nil {
 					assert.Contains(t, err.Error(), "more than 50 PRs")
@@ -933,11 +949,12 @@ func TestAdvRefusalsHaveNoSideEffects(t *testing.T) {
 		{"inferred: draft in the chain (direct mid)", setPR(func(p map[int]*fakePR) { p[4].Draft = true }), 3, "", "draft"},
 		{"inferred: draft in the chain (stack)", setPR(func(p map[int]*fakePR) { p[1].Draft = true }), 3, MergeModeStack, "draft"},
 		{"inferred: the PR itself is a draft", setPR(func(p map[int]*fakePR) { p[3].Draft = true }), 3, "", "draft"},
-		{"inferred: fork in the chain", setPR(func(p map[int]*fakePR) { p[2].HeadRepo = "someone/goliac" }), 3, "", "fork"},
+		{"inferred: fork above the PR, stack mode", setPR(func(p map[int]*fakePR) { p[2].HeadRepo = "someone/goliac" }), 3, MergeModeStack, "fork"},
+		{"inferred: fork below the PR, direct mode", setPR(func(p map[int]*fakePR) { p[4].HeadRepo = "someone/goliac" }), 3, "", "stops at PR #3"},
 		{"inferred: deleted fork in the chain", setPR(func(p map[int]*fakePR) { p[1].HeadRepo = "-" }), 3, MergeModeStack, "head repository"},
 		{"inferred: the chain forks", setPR(func(p map[int]*fakePR) {
 			p[9] = &fakePR{Number: 9, BaseRef: "b3", HeadRef: "other", HeadSha: "o", State: "open"}
-		}), 4, "", "forks"},
+		}), 4, MergeModeStack, "forks"},
 		{"inferred: the chain does not reach the default branch", setPR(func(p map[int]*fakePR) { p[4].BaseRef = "release" }), 3, "", "stops at PR #4"},
 		{"inferred: a PR below carries native stack metadata", setPR(func(p map[int]*fakePR) { p[4].StackSize, p[4].StackPosition, p[4].StackBase = 4, 1, "main" }), 3, "", "ambiguous"},
 		{"inferred: cycle", func() map[int]*fakePR {
