@@ -177,6 +177,9 @@ type fakeGitHub struct {
 	pendingRetarget     map[int]string // PR number -> new base
 	pendingSeen         map[int]bool
 
+	// branchTips: tip sha of the branches (GET /branches/{b}); a missing branch answers 404
+	branchTips map[string]string
+
 	reviewSeq  int64
 	violations []string
 }
@@ -423,7 +426,22 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			}
 			res = append(res, pr.payload())
 		}
+		if q.Get("sort") == "created" && q.Get("direction") == "desc" {
+			sort.SliceStable(res, func(i, j int) bool { return res[i]["number"].(int) > res[j]["number"].(int) })
+		}
+		if pp, err := strconv.Atoi(q.Get("per_page")); err == nil && len(res) > pp {
+			res = res[:pp]
+		}
 		return json.Marshal(res)
+
+	case method == "GET" && strings.HasPrefix(endpoint, "/repos/myorg/goliac/branches/"):
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		tip, ok := f.branchTips[strings.TrimPrefix(endpoint, "/repos/myorg/goliac/branches/")]
+		if !ok {
+			return httpError("404 Not Found", `{"message":"Branch not found"}`)
+		}
+		return []byte(fmt.Sprintf(`{"commit":{"sha":%q}}`, tip)), nil
 
 	case method == "POST" && reviewEndpoint.MatchString(endpoint):
 		f.mu.Lock()

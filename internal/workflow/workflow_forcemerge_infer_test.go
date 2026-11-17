@@ -271,13 +271,14 @@ func TestForcemergeInferredStack(t *testing.T) {
 			prs[58].State = "closed" // t2 closed without being merged; PR 59 would be on t2
 			prs[60] = &fakePR{Number: 60, Title: "t3", Author: "a60", BaseRef: "t2", HeadRef: "t3", HeadSha: "sha60", State: "open"}
 			gh := newFake(t, prs).allMethods()
+			gh.branchTips = map[string]string{"t2": "sha58"} // not pushed since the PR was closed
 			gh.syncMerge = okJSON(`{"merged":true}`)
 			fc, _ := newForcemergeForTest(t, gh)
 
 			_, err := mergePR(fc, 60, "ship it", mode)
 			assert.NotNil(t, err)
 			if err != nil {
-				assert.Contains(t, err.Error(), "nothing merged: PR #60 is based on branch t2, the head branch of PR #58 which is closed without being merged: merging into it would strand the change in a dead branch")
+				assert.Contains(t, err.Error(), "nothing merged: PR #60 is based on branch t2, the head branch of PR #58 which is closed without being merged and whose branch was not pushed since: merging into it would strand the change in a dead branch")
 			}
 			assertNothingChanged(t, gh)
 		})
@@ -296,11 +297,71 @@ func TestForcemergeInferredStack(t *testing.T) {
 		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/60/merge")))
 	})
 
+	// the base branch is only dead when the newest PR of the branch is closed unmerged AND the tip is still its head
+	liveBranch := func(t *testing.T, prs map[int]*fakePR, tips map[string]string) error {
+		prs[60] = &fakePR{Number: 60, Title: "x", Author: "a60", BaseRef: "release/1.0", HeadRef: "x", HeadSha: "sha60", State: "open"}
+		gh := newFake(t, prs).allMethods()
+		gh.branchTips = tips
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 60, "ship it", "")
+		if err == nil {
+			assert.Equal(t, 1, len(gh.find("PUT", "/pulls/60/merge")))
+		}
+		return err
+	}
+	oldClosed := func() *fakePR {
+		return &fakePR{Number: 10, Title: "old", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "old-tip", State: "closed"}
+	}
+
+	t.Run("a release branch with an old closed PR and later commits: merged as usual", func(t *testing.T) {
+		err := liveBranch(t, map[int]*fakePR{10: oldClosed()}, map[string]string{"release/1.0": "newer-tip"})
+		assert.Nil(t, err)
+	})
+
+	t.Run("a branch whose newest PR is merged, with an older closed one: merged as usual", func(t *testing.T) {
+		newer := &fakePR{Number: 20, Title: "newer", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "old-tip", State: "closed", Merged: true}
+		err := liveBranch(t, map[int]*fakePR{10: oldClosed(), 20: newer}, map[string]string{"release/1.0": "old-tip"})
+		assert.Nil(t, err)
+	})
+
+	t.Run("a branch whose newest PR is closed unmerged but an older one was merged, tip unchanged: refused", func(t *testing.T) {
+		older := &fakePR{Number: 5, Title: "older", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "x", State: "closed", Merged: true}
+		err := liveBranch(t, map[int]*fakePR{5: older, 10: oldClosed()}, map[string]string{"release/1.0": "old-tip"})
+		assert.NotNil(t, err)
+	})
+
+	t.Run("a branch with an open PR from it that is newer than the closed one: not dead", func(t *testing.T) {
+		open := &fakePR{Number: 20, Title: "open", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "old-tip", State: "open"}
+		// (the open PR below is found by the chain walk: this is no lone PR, so the chain is refused for another reason)
+		err := liveBranch(t, map[int]*fakePR{10: oldClosed(), 20: open}, map[string]string{"release/1.0": "old-tip"})
+		if err != nil {
+			assert.NotContains(t, err.Error(), "dead branch")
+		}
+	})
+
+	t.Run("a lone PR: reading the tip of its base branch fails or is unreadable: refused", func(t *testing.T) {
+		assert.NotNil(t, liveBranch(t, map[int]*fakePR{10: oldClosed()}, map[string]string{})) // 404
+		prs := map[int]*fakePR{10: oldClosed()}
+		prs[60] = &fakePR{Number: 60, Title: "x", BaseRef: "release/1.0", HeadRef: "x", HeadSha: "sha60", State: "open"}
+		gh := newFake(t, prs).allMethods()
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			if strings.HasPrefix(call.Endpoint, "/repos/myorg/goliac/branches/") {
+				return []byte(`not json`), nil
+			}
+			return nil, nil
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 60, "ship it", "")
+		assert.NotNil(t, err)
+		assertNothingChanged(t, gh)
+	})
+
 	t.Run("a lone PR: listing the closed PRs of its base branch fails: refused before any side effect", func(t *testing.T) {
 		prs := map[int]*fakePR{60: {Number: 60, Title: "t3", BaseRef: "t2", HeadRef: "t3", HeadSha: "sha60", State: "open"}}
 		gh := newFake(t, prs).allMethods()
 		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
-			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls" && strings.Contains(call.Parameters, "state=closed") {
+			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls" && strings.Contains(call.Parameters, "state=all") {
 				return httpError("500 Internal Server Error", `{}`)
 			}
 			return nil, nil

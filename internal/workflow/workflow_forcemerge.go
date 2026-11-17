@@ -609,18 +609,39 @@ func (g *ForcemergeImpl) chainPRsAbove(ctx context.Context, repo string, pr *pul
 	return res, nil
 }
 
-// refuseDeadBase refuses a PR based on the head branch of a PR that was closed without being merged
+// refuseDeadBase refuses a PR whose base branch is dead: the NEWEST PR (open, closed or merged, by creation date) whose
+// head is that branch is closed without being merged, and the tip of the branch is still that PR's head (nothing was
+// pushed since it was closed). Merging into it would strand the change. A long-lived branch (release, develop) that
+// had a PR closed once but moved on, or whose newest PR is merged or open, is alive. A failing lookup refuses
+// (conservative, like the other lookups).
 func (g *ForcemergeImpl) refuseDeadBase(ctx context.Context, repo string, pr *pullRequestInfo) error {
-	closed, err := g.listPRs(ctx, repo, fmt.Sprintf("state=closed&head=%s", url.QueryEscape(config.Config.GithubAppOrganization+":"+pr.Base.Ref)), fmt.Sprintf("the closed PRs of branch %s", pr.Base.Ref))
+	newest, err := g.listPRs(ctx, repo, fmt.Sprintf("state=all&sort=created&direction=desc&per_page=1&head=%s", url.QueryEscape(config.Config.GithubAppOrganization+":"+pr.Base.Ref)), fmt.Sprintf("the newest PR of branch %s", pr.Base.Ref))
 	if err != nil {
 		return err
 	}
-	for _, c := range closed {
-		if c.Head.Ref == pr.Base.Ref && !c.Merged && c.MergedAt == nil {
-			return fmt.Errorf("PR #%d is based on branch %s, the head branch of PR #%d which is closed without being merged: merging into it would strand the change in a dead branch (reopen PR #%d, or change the base branch of PR #%d)", pr.Number, pr.Base.Ref, c.Number, c.Number, pr.Number)
-		}
+	if len(newest) == 0 {
+		return nil
 	}
-	return nil
+	c := newest[0]
+	if c.Head.Ref != pr.Base.Ref || c.State != "closed" || c.Merged || c.MergedAt != nil {
+		return nil
+	}
+	body, err := g.ws.CallRestAPI(ctx, fmt.Sprintf("/repos/%s/%s/branches/%s", config.Config.GithubAppOrganization, repo, pr.Base.Ref), "", "GET", nil, nil)
+	if err != nil {
+		return fmt.Errorf("error reading the branch %s (base of PR #%d): %v (%s)", pr.Base.Ref, pr.Number, err, string(body))
+	}
+	var branch struct {
+		Commit struct {
+			Sha string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &branch); err != nil || branch.Commit.Sha == "" {
+		return fmt.Errorf("error parsing the branch %s (base of PR #%d): %v (%s)", pr.Base.Ref, pr.Number, err, string(body))
+	}
+	if branch.Commit.Sha != c.Head.Sha {
+		return nil // the branch moved on since the PR was closed: alive
+	}
+	return fmt.Errorf("PR #%d is based on branch %s, the head branch of PR #%d which is closed without being merged and whose branch was not pushed since: merging into it would strand the change in a dead branch (reopen PR #%d, or change the base branch of PR #%d)", pr.Number, pr.Base.Ref, c.Number, c.Number, pr.Number)
 }
 
 // checkInferredMember refuses a PR that can't be part of an inferred stack
@@ -701,8 +722,8 @@ func (g *ForcemergeImpl) inferStack(ctx context.Context, repo string, pr *pullRe
 				return false, err
 			}
 			if len(above) == 0 {
-				// nothing above: a lone PR is merged as usual, unless its base branch is the head of a PR closed without
-				// being merged (the chain was broken): the change would be stranded in that dead branch
+				// nothing above: a lone PR is merged as usual, unless its base branch is dead (the newest PR of
+				// that branch is closed without being merged and the branch was not pushed since): the change would be stranded
 				if err := g.refuseDeadBase(ctx, repo, pr); err != nil {
 					return false, err
 				}
