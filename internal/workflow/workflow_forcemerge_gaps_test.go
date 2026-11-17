@@ -203,6 +203,7 @@ func TestForcemergeInferenceEdges(t *testing.T) {
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 4, "because", MergeModeStack)
 		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "unable to read the default branch")
 		assert.Empty(t, gh.sideEffects())
 	})
 
@@ -430,4 +431,119 @@ func TestForcemergeDismissWithoutAReviewID(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "could not all be dismissed, dismiss them manually: PR #32 (the approval may exist, its review id is unknown)")
 	assert.Empty(t, gh.find("PUT", "/dismissals"))
+}
+
+func TestForcemergeDeadBaseNewestPRChecks(t *testing.T) {
+	newest := func(item string) *fakeGitHub {
+		prs := map[int]*fakePR{11: {Number: 11, Title: "hotfix", Author: "a11", BaseRef: "release/1.0", HeadRef: "hotfix", HeadSha: "sha11", State: "open"}}
+		gh := newFake(t, prs).allMethods()
+		gh.branchTips = map[string]string{"release/1.0": "tip"}
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls" && strings.Contains(call.Parameters, "state=all") {
+				return []byte("[" + item + "]"), nil
+			}
+			return nil, nil
+		}
+		return gh
+	}
+	closed := `{"number":10,"state":"closed","merged_at":null,"draft":false,"base":{"ref":"main"},"head":{"ref":"release/1.0","sha":"tip","repo":{"full_name":"myorg/goliac"}},"stack":null}`
+
+	t.Run("control: the newest PR is closed unmerged with the tip unchanged: refused", func(t *testing.T) {
+		gh := newest(closed)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 11, "because", "")
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "dead branch")
+	})
+	t.Run("the newest PR is open (state not closed): not dead", func(t *testing.T) {
+		gh := newest(strings.Replace(closed, `"state":"closed"`, `"state":"open"`, 1))
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 11, "because", "")
+		assert.Nil(t, err)
+	})
+	t.Run("the newest PR listed has another head branch than the base (a filter mismatch): not dead", func(t *testing.T) {
+		gh := newest(strings.Replace(closed, `"ref":"release/1.0"`, `"ref":"another"`, 1))
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 11, "because", "")
+		assert.Nil(t, err)
+	})
+}
+
+func TestForcemergeAsyncExplicitSquashIsNeverReplaced(t *testing.T) {
+	gh := newFake(t, fixtureStack()).allMethods()
+	gh.asyncMerge = func(call restCall) ([]byte, error) {
+		return httpError("405 Method Not Allowed", `{"message":"Merge commits are not allowed on this repository."}`)
+	}
+	fc, _ := newForcemergeForTest(t, gh)
+	err := fc.mergePRAsync(context.Background(), "goliac", 4, "sha4", "t", "m", "merge", true, true)
+	assert.NotNil(t, err)
+	assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")), "explicit: no squash attempt")
+}
+
+func TestForcemergeModeIsCaseInsensitive(t *testing.T) {
+	for _, mode := range []string{"STACK", "Stack", " stack "} {
+		gh := newFake(t, fixtureStackPlain()).allMethods()
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc := executeFixture(t, gh, &recordingPlugin{})
+		_, err := exec(fc, 3, mode, false)
+		assert.Nil(t, err, mode)
+		assert.Equal(t, 4, len(gh.find("PUT", "/merge-async")), mode)
+	}
+	for _, mode := range []string{"DIRECT", "Direct"} {
+		gh := newFake(t, fixtureStackPlain()).allMethods()
+		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+		gh.markMergedOnBranchMerge = true
+		fc := executeFixture(t, gh, &recordingPlugin{})
+		_, err := exec(fc, 3, mode, false)
+		assert.Nil(t, err, mode)
+	}
+}
+
+func TestForcemergeStrayClassification(t *testing.T) {
+	t.Run("a PR above with GitHub stack metadata is left untouched and named", func(t *testing.T) {
+		prs := fixturePlainChain()
+		prs[60] = &fakePR{Number: 60, Title: "native", BaseRef: "t2", HeadRef: "native", HeadSha: "sha60", State: "open", StackSize: 2, StackPosition: 1, StackBase: "main"}
+		gh := newFake(t, prs).allMethods()
+		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+		gh.markMergedOnBranchMerge = true
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 58, "because", "")
+		assert.Nil(t, err)
+		assert.Equal(t, "t2", gh.pr(60).BaseRef)
+		assert.Equal(t, "t1", gh.pr(59).BaseRef)
+		assert.Contains(t, summary, "#60 (has GitHub stack metadata)")
+	})
+
+	t.Run("a PR above that is not open any more (race) is neither retargeted nor named", func(t *testing.T) {
+		gh := newFake(t, fixturePlainChain()).allMethods()
+		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+		gh.markMergedOnBranchMerge = true
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls" && strings.Contains(call.Parameters, "base=t2") && strings.Contains(call.Parameters, "page=1") {
+				return []byte(`[{"number":59,"title":"t3","state":"open","draft":false,"base":{"ref":"t2"},"head":{"ref":"t3","sha":"sha59","repo":{"full_name":"myorg/goliac"}},"stack":null},` +
+					`{"number":77,"title":"gone","state":"closed","draft":false,"base":{"ref":"t2"},"head":{"ref":"gone","sha":"sha77","repo":{"full_name":"myorg/goliac"}},"stack":null}]`), nil
+			}
+			return nil, nil
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 58, "because", "")
+		assert.Nil(t, err)
+		assert.NotContains(t, summary, "#77")
+		assert.Empty(t, gh.find("PATCH", "/pulls/77"))
+	})
+
+	t.Run("a lone PR on a release branch with only a draft above is merged as a plain PR and the draft is named", func(t *testing.T) {
+		prs := map[int]*fakePR{
+			32: {Number: 32, Title: "hotfix", Author: "a32", BaseRef: "release/1.0", HeadRef: "hotfix", HeadSha: "aaa", State: "open"},
+			33: {Number: 33, Title: "wip", BaseRef: "hotfix", HeadRef: "wip", HeadSha: "bbb", State: "open", Draft: true},
+		}
+		gh := newFake(t, prs).allMethods()
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		fc, _ := newForcemergeForTest(t, gh)
+		summary, err := mergePR(fc, 32, "because", "")
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/32/merge")))
+		assert.Contains(t, summary, "#33 (draft)")
+	})
 }
