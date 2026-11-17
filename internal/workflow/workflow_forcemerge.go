@@ -626,7 +626,7 @@ func (g *ForcemergeImpl) refuseDeadBase(ctx context.Context, repo string, pr *pu
 	if c.Head.Ref != pr.Base.Ref || c.State != "closed" || c.Merged || c.MergedAt != nil {
 		return nil
 	}
-	body, err := g.ws.CallRestAPI(ctx, fmt.Sprintf("/repos/%s/%s/branches/%s", config.Config.GithubAppOrganization, repo, pr.Base.Ref), "", "GET", nil, nil)
+	body, err := g.ws.CallRestAPI(ctx, fmt.Sprintf("/repos/%s/%s/branches/%s", config.Config.GithubAppOrganization, repo, url.PathEscape(pr.Base.Ref)), "", "GET", nil, nil)
 	if err != nil {
 		return fmt.Errorf("error reading the branch %s (base of PR #%d): %v (%s)", pr.Base.Ref, pr.Number, err, string(body))
 	}

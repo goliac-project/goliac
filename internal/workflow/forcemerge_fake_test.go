@@ -437,8 +437,11 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 	case method == "GET" && strings.HasPrefix(endpoint, "/repos/myorg/goliac/branches/"):
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		tip, ok := f.branchTips[strings.TrimPrefix(endpoint, "/repos/myorg/goliac/branches/")]
-		if !ok {
+		// like GitHub: a slash in the branch name must be escaped (%2F), otherwise the path has more segments: 404
+		rest := strings.TrimPrefix(endpoint, "/repos/myorg/goliac/branches/")
+		name, uerr := url.PathUnescape(rest)
+		tip, ok := f.branchTips[name]
+		if strings.Contains(rest, "/") || uerr != nil || !ok {
 			return httpError("404 Not Found", `{"message":"Branch not found"}`)
 		}
 		return []byte(fmt.Sprintf(`{"commit":{"sha":%q}}`, tip)), nil

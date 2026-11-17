@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -200,4 +201,81 @@ func TestGithubErrorDetail(t *testing.T) {
 	assert.Equal(t, "boom", githubErrorDetail([]byte(`{"message":"boom"}`)))
 	assert.Equal(t, "deep", githubErrorDetail([]byte(`{"message":"boom","details":{"message":"deep"}}`)))
 	assert.Equal(t, "", githubErrorDetail([]byte(`not json`)))
+}
+
+// branch names with slashes (release/1.0, feature/a/b) must be escaped in URL paths and queries
+func fixtureSlashChain() map[int]*fakePR {
+	return map[int]*fakePR{
+		71: {Number: 71, Title: "p3", Author: "a71", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "sha71", State: "open"},
+		72: {Number: 72, Title: "p2", Author: "a72", BaseRef: "release/1.0", HeadRef: "feature/a/b", HeadSha: "sha72", State: "open"},
+		73: {Number: 73, Title: "p1", Author: "a73", BaseRef: "feature/a/b", HeadRef: "feature/a/b/c", HeadSha: "sha73", State: "open"},
+	}
+}
+
+func TestForcemergeSlashBranchNames(t *testing.T) {
+	t.Run("stack mode: the chain is found by base and head with slash names, all merged into main", func(t *testing.T) {
+		gh := newFake(t, fixtureSlashChain()).allMethods()
+		gh.deleteBranchOnMerge = true
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 72, "ship it", MergeModeStack)
+		assert.Nil(t, err)
+		for _, n := range []int{71, 72, 73} {
+			assert.True(t, gh.pr(n).Merged, "PR #%d merged", n)
+		}
+	})
+
+	t.Run("direct on the middle PR: merged into the slash-named parent branch, the PR above retargeted onto it", func(t *testing.T) {
+		gh := newFake(t, fixtureSlashChain()).allMethods()
+		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+		gh.markMergedOnBranchMerge = true
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 72, "ship it", "")
+		assert.Nil(t, err)
+		merges := gh.find("POST", "/repos/myorg/goliac/merges")
+		assert.Equal(t, 1, len(merges))
+		assert.Equal(t, "release/1.0", merges[0].Body["base"])
+		assert.Equal(t, "release/1.0", gh.pr(73).BaseRef)
+	})
+
+	t.Run("direct on the bottom PR with a slash name: PR above retargeted onto main", func(t *testing.T) {
+		gh := newFake(t, fixtureSlashChain()).allMethods()
+		gh.asyncMerge = okJSON(asyncMerged)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 71, "ship it", "")
+		assert.Nil(t, err)
+		assert.Equal(t, "main", gh.pr(72).BaseRef)
+	})
+
+	t.Run("dead-base check: the tip of release/1.0 is read with an escaped path", func(t *testing.T) {
+		for _, tc := range []struct {
+			base, tip string
+			refused   bool
+		}{{"release/1.0", "sha-closed", true}, {"feature/a/b", "moved-on", false}} {
+			prs := map[int]*fakePR{
+				10: {Number: 10, Title: "old", BaseRef: "main", HeadRef: tc.base, HeadSha: "sha-closed", State: "closed"},
+				11: {Number: 11, Title: "x", Author: "a11", BaseRef: tc.base, HeadRef: "x", HeadSha: "sha11", State: "open"},
+			}
+			gh := newFake(t, prs).allMethods()
+			gh.branchTips = map[string]string{tc.base: tc.tip}
+			gh.syncMerge = okJSON(`{"merged":true}`)
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, 11, "ship it", "")
+			if tc.refused {
+				assert.NotNil(t, err, tc.base)
+				if err != nil {
+					assert.Contains(t, err.Error(), "dead branch")
+				}
+			} else {
+				assert.Nil(t, err, tc.base)
+			}
+			var paths []string
+			for _, c := range gh.find("GET", "") {
+				if strings.Contains(c.Endpoint, "/branches/") {
+					paths = append(paths, c.Endpoint)
+				}
+			}
+			assert.Equal(t, []string{"/repos/myorg/goliac/branches/" + url.PathEscape(tc.base)}, paths)
+		}
+	})
 }
