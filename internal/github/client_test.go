@@ -215,3 +215,22 @@ func TestCallRestAPIRateLimitWithoutResetHeader(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected status: 429")
 	assert.Contains(t, string(body), "secondary rate limit")
 }
+
+func TestCallRestAPIRateLimitWaitCutShort(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"message":"rate limit"}`))
+	}))
+	defer testServer.Close()
+	client := &GitHubClientImpl{gitHubServer: testServer.URL, httpClient: &http.Client{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	body, err := client.CallRestAPI(ctx, "/x", "", "PUT", map[string]interface{}{"a": "b"}, nil)
+	assert.NotNil(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	// the caller sees the 429 (the request was rejected), not a bare context error
+	assert.Contains(t, err.Error(), "unexpected status: 429")
+	assert.Contains(t, string(body), "rate limit")
+}

@@ -239,3 +239,16 @@ func TestForcemergeWaitConfigEdges(t *testing.T) {
 	config.Config.WorkflowForcemergeTimeoutSeconds = 3
 	assert.Equal(t, 3*time.Second, forcemergeTimeout())
 }
+
+func TestForcemergeRateLimitCutShortIsDefinite(t *testing.T) {
+	// the client reports a rate limit whose wait was cancelled with the 429 status: the merge did not happen
+	gh := plainFake(t)
+	gh.syncMerge = func(call restCall) ([]byte, error) {
+		return httpError("429 Too Many Requests", `{"message":"rate limit"}`)
+	}
+	fc, _ := newForcemergeForTest(t, gh)
+	_, err := mergePR(fc, 32, "because", "")
+	assert.NotNil(t, err)
+	assert.NotContains(t, err.Error(), "outcome is unknown")
+	assert.Equal(t, 1, len(gh.find("PUT", "/dismissals")))
+}

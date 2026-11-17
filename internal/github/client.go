@@ -457,6 +457,12 @@ func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, param
 			if childSpan != nil {
 				childSpan.SetStatus(codes.Error, fmt.Sprintf("waitRateLimit: %s", err.Error()))
 			}
+			if ctx.Err() != nil {
+				// the wait for the reset was cut short (deadline or cancellation): the request was rejected, not lost,
+				// the caller sees the status of the rate limit
+				responseBody, _ := io.ReadAll(resp.Body)
+				return responseBody, fmt.Errorf("unexpected status: %s (rate limited: waiting for the reset was cancelled: %v)", resp.Status, err)
+			}
 			return nil, err
 		}
 
