@@ -159,7 +159,7 @@ func TestForcemergeExecuteWorkflow(t *testing.T) {
 	})
 
 	t.Run("direct merge: summary returned", func(t *testing.T) {
-		gh := newFake(t, fixtureStack())
+		gh := newFake(t, fixtureStackPlain()).allMethods()
 		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
 		gh.markMergedOnBranchMerge = true
 		plugin := &recordingPlugin{}
@@ -259,12 +259,12 @@ func TestForcemergeInFlightGuard(t *testing.T) {
 		assert.Contains(t, err.Error(), "already running")
 		close(release)
 		assert.Nil(t, <-done)
-		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")))
+		assert.Equal(t, 4, len(gh.find("PUT", "/merge-async")), "bottom-up, one merge per PR")
 	})
 
 	t.Run("a direct merge also guards the parent and the PRs above (adjacent PRs)", func(t *testing.T) {
 		for _, adjacent := range []int{2, 4} { // 2 is retargeted by a direct merge of 3, 4 is its parent
-			gh := newFake(t, fixtureStack())
+			gh := newFake(t, fixtureStackPlain()).allMethods()
 			gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
 			gh.markMergedOnBranchMerge = true
 			fc := executeFixture(t, gh, &recordingPlugin{})

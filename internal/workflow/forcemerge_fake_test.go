@@ -77,6 +77,10 @@ func (p *fakePR) payload() map[string]interface{} {
 		"head":     map[string]interface{}{"ref": p.HeadRef, "sha": p.HeadSha, "repo": headRepo},
 		"stack":    nil,
 	}
+	m["merged_at"] = nil
+	if p.Merged {
+		m["merged_at"] = "2026-11-17T17:15:08Z"
+	}
 	if p.StackSize > 0 {
 		m["stack"] = map[string]interface{}{
 			"position": p.StackPosition,
@@ -171,6 +175,7 @@ type fakeGitHub struct {
 	deleteBranchOnMerge bool
 	autoRetargetLate    bool
 	pendingRetarget     map[int]string // PR number -> new base
+	pendingSeen         map[int]bool
 
 	reviewSeq  int64
 	violations []string
@@ -178,8 +183,13 @@ type fakeGitHub struct {
 
 // afterMerge applies what GitHub does after a PR merged into into (f.mu must be held)
 func (f *fakeGitHub) afterMerge(merged *fakePR, into string) {
-	if !f.deleteBranchOnMerge {
+	if !f.deleteBranchOnMerge && !merged.githubStacked() {
 		return
+	}
+	if merged.githubStacked() && merged.StackBase != "" {
+		// live (phoenix-tooling, 2026-11-17): the PR above a merged PR of a GitHub stack is retargeted by GitHub onto the
+		// stack base, not onto the base branch of the merged PR
+		into = merged.StackBase
 	}
 	for _, n := range f.sortedNumbers() {
 		child := f.prs[n]
@@ -379,6 +389,17 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		if !ok {
 			return httpError("404 Not Found", `{"message":"Not Found"}`)
 		}
+		if into, late := f.pendingRetarget[n]; late && pr.githubStacked() {
+			// GitHub's own retarget of a PR of a stack (Goliac never patches it) lands after the first read
+			if f.pendingSeen == nil {
+				f.pendingSeen = map[int]bool{}
+			}
+			if f.pendingSeen[n] {
+				pr.BaseRef = into
+				delete(f.pendingRetarget, n)
+			}
+			f.pendingSeen[n] = true
+		}
 		return json.Marshal(pr.payload())
 
 	case method == "GET" && endpoint == "/repos/myorg/goliac/pulls":
@@ -389,6 +410,9 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		for _, n := range f.sortedNumbers() {
 			pr := f.prs[n]
 			if q.Get("state") == "open" && pr.State != "open" {
+				continue
+			}
+			if q.Get("state") == "closed" && pr.State != "closed" {
 				continue
 			}
 			if b := q.Get("base"); b != "" && pr.BaseRef != b {
@@ -426,6 +450,10 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			delete(f.pendingRetarget, n)
 		}
 		if base, ok := body["base"].(string); ok {
+			if pr.githubStacked() && base != pr.BaseRef {
+				// live: GitHub refuses to change the base of a PR of a stack
+				return httpError("422 Unprocessable Entity", `{"message":"Validation Failed","errors":[{"message":"Cannot change the base branch because the pull request is part of a stack.","resource":"PullRequest","field":"base","code":"invalid"}]}`)
+			}
 			if f.deleteBranchOnMerge && base == pr.BaseRef {
 				// GitHub refuses a base change onto the current base when a PR with this head and base exists
 				return httpError("422 Unprocessable Entity", fmt.Sprintf(`{"message":"Validation Failed","errors":[{"message":"A pull request already exists for base branch '%s' and head branch '%s'","resource":"PullRequest","field":"base","code":"invalid"}]}`, base, pr.HeadRef))
@@ -457,6 +485,16 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		return res, err
 
 	case method == "PUT" && asyncPath.MatchString(endpoint):
+		if n, _ := strconv.Atoi(asyncPath.FindStringSubmatch(endpoint)[1]); body["bypass_rules"] == true {
+			f.mu.Lock()
+			pr := f.prs[n]
+			notBottom := pr != nil && pr.githubStacked() && pr.StackBase != "" && pr.BaseRef != pr.StackBase
+			f.mu.Unlock()
+			if notBottom {
+				// live: "Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."
+				return httpError("400 Bad Request", `{"status":"failed","details":{"message":"Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."}}`)
+			}
+		}
 		res, err := hook(asyncMerge)
 		f.noteAsync(endpoint, res, err)
 		return res, err
@@ -591,6 +629,16 @@ func fixtureStack() map[int]*fakePR {
 			StackSize:     4,
 			StackBase:     "main",
 		}
+	}
+	return prs
+}
+
+// fixtureStackPlain is the chain 1 > 2 > 3 > 4 > main of fixtureStack without GitHub's stack metadata (stack: null):
+// Goliac infers the stack from the base branches
+func fixtureStackPlain() map[int]*fakePR {
+	prs := fixtureStack()
+	for _, p := range prs {
+		p.StackPosition, p.StackSize, p.StackBase = 0, 0, ""
 	}
 	return prs
 }

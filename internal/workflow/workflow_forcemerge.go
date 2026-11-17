@@ -234,8 +234,10 @@ type pullRequestInfo struct {
 	HTMLURL string `json:"html_url"`
 	State   string `json:"state"`
 	Merged  bool   `json:"merged"`
-	Draft   bool   `json:"draft"`
-	User    struct {
+	// MergedAt is set on the PRs of the list endpoints, which have no "merged" field
+	MergedAt *string `json:"merged_at"`
+	Draft    bool    `json:"draft"`
+	User     struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Base struct {
@@ -607,6 +609,20 @@ func (g *ForcemergeImpl) chainPRsAbove(ctx context.Context, repo string, pr *pul
 	return res, nil
 }
 
+// refuseDeadBase refuses a PR based on the head branch of a PR that was closed without being merged
+func (g *ForcemergeImpl) refuseDeadBase(ctx context.Context, repo string, pr *pullRequestInfo) error {
+	closed, err := g.listPRs(ctx, repo, fmt.Sprintf("state=closed&head=%s", url.QueryEscape(config.Config.GithubAppOrganization+":"+pr.Base.Ref)), fmt.Sprintf("the closed PRs of branch %s", pr.Base.Ref))
+	if err != nil {
+		return err
+	}
+	for _, c := range closed {
+		if c.Head.Ref == pr.Base.Ref && !c.Merged && c.MergedAt == nil {
+			return fmt.Errorf("PR #%d is based on branch %s, the head branch of PR #%d which is closed without being merged: merging into it would strand the change in a dead branch (reopen PR #%d, or change the base branch of PR #%d)", pr.Number, pr.Base.Ref, c.Number, c.Number, pr.Number)
+		}
+	}
+	return nil
+}
+
 // checkInferredMember refuses a PR that can't be part of an inferred stack
 func checkInferredMember(repo string, p *pullRequestInfo) error {
 	if err := p.validate(repo); err != nil {
@@ -685,6 +701,11 @@ func (g *ForcemergeImpl) inferStack(ctx context.Context, repo string, pr *pullRe
 				return false, err
 			}
 			if len(above) == 0 {
+				// nothing above: a lone PR is merged as usual, unless its base branch is the head of a PR closed without
+				// being merged (the chain was broken): the change would be stranded in that dead branch
+				if err := g.refuseDeadBase(ctx, repo, pr); err != nil {
+					return false, err
+				}
 				return false, nil
 			}
 		}
@@ -893,6 +914,12 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 		plan.method = m
 	}
 
+	if plan.mode == MergeModeDirect && !pr.stackInferred && !pr.isStackBottom() {
+		// GitHub does not support merging a PR out of the middle of its own stack: it retargets the PRs above onto the
+		// stack base by itself and refuses Goliac's retarget ("part of a stack")
+		return nil, fmt.Errorf("nothing merged: PR #%d is not the bottom PR of its GitHub stack (based on %s, not on %s): GitHub does not support merging a PR out of the middle of a stack. Merge the bottom PR first, or use the %q merge mode to merge the whole stack", pr.Number, pr.Base.Ref, pr.Stack.Base.Ref, MergeModeStack)
+	}
+
 	if plan.mode == MergeModeStack {
 		if err := g.planStack(ctx, repo, plan); err != nil {
 			return nil, fmt.Errorf("nothing merged: %v", err)
@@ -1096,10 +1123,8 @@ func describeApprovals(approvals []*approval) string {
 // executePlan approves and merges. It returns a summary of what was merged for a stacked PR.
 func (g *ForcemergeImpl) executePlan(ctx context.Context, plan *mergePlan) (string, error) {
 	switch {
-	case plan.isStack() && plan.pr.stackInferred:
-		return g.mergeInferredStack(ctx, plan)
 	case plan.isStack():
-		return g.mergeWholeStack(ctx, plan)
+		return g.mergeStackBottomUp(ctx, plan)
 	case plan.isDirect():
 		return g.mergeDirect(ctx, plan)
 	}
@@ -1233,7 +1258,7 @@ func (g *ForcemergeImpl) mergeDirect(ctx context.Context, plan *mergePlan) (stri
 	if !bottom {
 		ensureErr = g.ensureMerged(ctx, plan.username, repo, pr, mergeSha)
 	}
-	restacked, restackErr := g.restack(ctx, repo, pr, plan.children)
+	restacked, restackErr := g.retargetAfterMerge(ctx, repo, pr, pr, plan.children)
 
 	if ensureErr != nil || restackErr != nil {
 		errs := []string{}
@@ -1250,6 +1275,56 @@ func (g *ForcemergeImpl) mergeDirect(ctx context.Context, plan *mergePlan) (stri
 		summary += fmt.Sprintf("; retargeted onto `%s`: %s", pr.Base.Ref, strings.Join(restacked, ", "))
 	}
 	return summary, nil
+}
+
+// retargetAfterMerge moves the PRs above a merged PR onto its base branch. For a stack inferred from the base branches
+// Goliac retargets them (restack). For a GitHub stack, GitHub retargets the PR above onto the stack base by itself and
+// refuses any other change of the base ("part of a stack"): Goliac only waits for it.
+// requested is the PR the force merge was requested on (it tells where the stack comes from).
+func (g *ForcemergeImpl) retargetAfterMerge(ctx context.Context, repo string, requested, merged *pullRequestInfo, children []*pullRequestInfo) ([]string, error) {
+	if requested.stackInferred {
+		return g.restack(ctx, repo, merged, children)
+	}
+	attempts := g.restackAttempts
+	if attempts <= 0 {
+		attempts = defaultRestackAttempts
+	}
+	backoff := g.restackBackoff
+	if backoff <= 0 {
+		backoff = defaultRestackBackoff
+	}
+	failed := []string{}
+	for _, child := range children {
+		var lastErr error
+		wait := backoff
+		ok := false
+		for attempt := 1; attempt <= attempts; attempt++ {
+			cur, err := g.fetchPullRequest(ctx, repo, strconv.Itoa(child.Number))
+			if err == nil {
+				if cur.State == "closed" || cur.Merged || cur.Base.Ref == merged.Base.Ref {
+					ok = true
+					break
+				}
+				lastErr = fmt.Errorf("it is still based on %s", cur.Base.Ref)
+			} else {
+				lastErr = err
+			}
+			if attempt < attempts {
+				if serr := g.clockSleep(ctx, wait); serr != nil {
+					lastErr = fmt.Errorf("%v: %v", lastErr, serr)
+					break
+				}
+				wait *= 2
+			}
+		}
+		if !ok {
+			failed = append(failed, fmt.Sprintf("PR #%d: %v", child.Number, lastErr))
+		}
+	}
+	if len(failed) > 0 {
+		return nil, fmt.Errorf("PR #%d is merged, but GitHub did not retarget the PRs above it onto %s (%s). Fix manually: change the base branch of these PRs", merged.Number, merged.Base.Ref, strings.Join(failed, "; "))
+	}
+	return nil, nil
 }
 
 // restack retargets the PRs that were above the merged PR onto its base branch, with retries.
@@ -1508,72 +1583,26 @@ func (g *ForcemergeImpl) ensureMerged(ctx context.Context, username, repo string
 	return nil
 }
 
-/*
- * mergeWholeStack merges every PR of the stack into the stack base branch:
- * with the stack 1 > 2 > 3 > 4 > main, a stack merge requested on any of them merges 1 to 4 into main.
- * Every PR of the stack is approved, then the top PR is merged with the asynchronous merge API,
- * which includes all its open downstack PRs.
- */
-func (g *ForcemergeImpl) mergeWholeStack(ctx context.Context, plan *mergePlan) (string, error) {
-	stack := plan.stack
-	pr := plan.pr
-	repo := plan.repo
-	top := stack[0]
-	bottom := stack[len(stack)-1]
-
-	approvals := []*approval{}
-	for _, p := range stack {
-		review := forcemergeReviewBody(plan.username, p.Number, p.Title, p.HTMLURL, plan.explanation) +
-			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d. %s", plan.mode, len(stack), top.Number, bottom.Number, pr.Stack.Base.Ref, pr.Number, pr.stackSource())
-		a, err := g.approvePR(ctx, repo, p, review)
-		if err != nil {
-			return "", g.failAfterApprovals(ctx, repo, approvals, err)
-		}
-		approvals = append(approvals, a)
+// whyOneAtATime explains, in the review, why a stack is not merged with a single asynchronous merge
+func whyOneAtATime(pr *pullRequestInfo) string {
+	if pr.stackInferred {
+		return "GitHub merges a whole stack in one operation only for its own stacked PRs, so"
 	}
-
-	if err := g.headsUnchanged(ctx, repo, stack); err != nil {
-		return "", g.failAfterApprovals(ctx, repo, approvals, err)
-	}
-
-	// https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously
-	// "For a stacked pull request, the operation includes all open downstack pull requests."
-	err := g.mergePRAsync(
-		ctx,
-		repo,
-		top.Number,
-		top.Head.Sha,
-		forcemergeCommitTitle(top.Title, top.Number, plan.username),
-		forcemergeStackCommitMessage(plan.username, pr.Number, stack),
-		plan.method,
-		plan.explicit,
-	)
-	if err != nil {
-		return "", g.failAfterApprovals(ctx, repo, approvals, err)
-	}
-	notMerged := []string{}
-	for _, p := range stack {
-		if err := g.confirmMerged(ctx, repo, p.Number); err != nil {
-			notMerged = append(notMerged, err.Error())
-		}
-	}
-	if len(notMerged) > 0 {
-		return "", fmt.Errorf("the asynchronous merge of the stack succeeded but not every PR is confirmed merged: %s", strings.Join(notMerged, "; "))
-	}
-	return fmt.Sprintf("Force merged (stack) into `%s`: %s", pr.Stack.Base.Ref, summarize(stack)), nil
+	return "GitHub only lets Goliac bypass the rules on the bottom-most unmerged PR of a stack, so"
 }
 
 /*
- * mergeInferredStack merges a stack inferred from the chain of PRs into the stack base branch (the default branch).
- * The asynchronous merge API only takes the downstack PRs along "for a stacked pull request", i.e. a PR GitHub
- * itself considers stacked (non null stack payload). Merging the top PR of a plain chain would merge it alone
- * into its own base branch. So every PR of the stack is approved, then the PRs are merged one at a time from the
+ * mergeStackBottomUp merges a stack into the stack base branch (the default branch).
+ * A stack inferred from the chain of PRs can't use a single asynchronous merge: the API only takes the downstack PRs
+ * along "for a stacked pull request" (non null stack payload), so the top PR of a plain chain would be merged alone
+ * into its own base branch. A GitHub stack can't either: GitHub refuses to bypass the rules (bypass_rules) for a PR that is
+ * not the bottom-most unmerged PR of its stack. So every PR of the stack is approved, then the PRs are merged one at a time from the
  * bottom up, each with the asynchronous merge API into the default branch: the next PR is retargeted onto the
  * default branch only once GitHub confirms the PR below it merged.
  * On a failure, the PRs already merged stay merged (and listed), and the approvals of the others are dismissed
  * (left in place when the outcome is unknown).
  */
-func (g *ForcemergeImpl) mergeInferredStack(ctx context.Context, plan *mergePlan) (string, error) {
+func (g *ForcemergeImpl) mergeStackBottomUp(ctx context.Context, plan *mergePlan) (string, error) {
 	stack := plan.stack // top to bottom
 	pr := plan.pr
 	repo := plan.repo
@@ -1585,7 +1614,7 @@ func (g *ForcemergeImpl) mergeInferredStack(ctx context.Context, plan *mergePlan
 	created := []*approval{}
 	for _, p := range stack {
 		review := forcemergeReviewBody(plan.username, p.Number, p.Title, p.HTMLURL, plan.explanation) +
-			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d. %s GitHub merges a whole stack in one operation only for its own stacked PRs, so the PRs are merged one at a time from the bottom (#%d) up, each PR being retargeted onto `%s` once the PR below it is merged.", plan.mode, len(stack), top.Number, bottom.Number, base, pr.Number, pr.stackSource(), bottom.Number, base)
+			fmt.Sprintf("\n\nMerge mode: `%s`. Merging the whole stack (%d PRs, #%d to #%d) into `%s`, requested on PR #%d. %s %s the PRs are merged one at a time from the bottom (#%d) up, each PR being retargeted onto `%s` once the PR below it is merged.", plan.mode, len(stack), top.Number, bottom.Number, base, pr.Number, pr.stackSource(), whyOneAtATime(pr), bottom.Number, base)
 		a, err := g.approvePR(ctx, repo, p, review)
 		if err != nil {
 			return "", g.failAfterApprovals(ctx, repo, created, err)
@@ -1624,7 +1653,7 @@ func (g *ForcemergeImpl) mergeInferredStack(ctx context.Context, plan *mergePlan
 			// the PR below is merged (and based on the stack base): retarget this one onto the stack base
 			below := *merged[len(merged)-1]
 			below.Base.Ref = base
-			if _, err := g.restack(ctx, repo, &below, []*pullRequestInfo{p}); err != nil {
+			if _, err := g.retargetAfterMerge(ctx, repo, pr, &below, []*pullRequestInfo{p}); err != nil {
 				return "", fail(i, err)
 			}
 		}

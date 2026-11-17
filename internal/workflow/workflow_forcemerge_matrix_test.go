@@ -1,8 +1,11 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -99,4 +102,102 @@ func TestForcemergeLiveMatrix4Chain(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestForcemergePlanDirectDefensiveChecks(t *testing.T) {
+	// planDirect runs after the inference or the stack metadata checks: it re-reads the neighbours and refuses
+	// what changed in between
+	newPlan := func(gh *fakeGitHub, number int) (*ForcemergeImpl, *mergePlan) {
+		fc, _ := newForcemergeForTest(t, gh)
+		info, err := fc.fetchPullRequest(context.Background(), "goliac", fmt.Sprint(number))
+		assert.Nil(t, err)
+		info.Stack = &prStack{Position: 2, Size: 3}
+		info.Stack.Base.Ref = "main"
+		info.stackInferred = true
+		return fc, &mergePlan{pr: info}
+	}
+
+	t.Run("the PR below disappeared", func(t *testing.T) {
+		prs := fixturePlainChain()
+		delete(prs, 57)
+		fc, plan := newPlan(newFake(t, prs), 58)
+		err := fc.planDirect(context.Background(), "goliac", plan)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "no open PR of the same stack has this head branch")
+	})
+
+	t.Run("two PRs below", func(t *testing.T) {
+		prs := fixturePlainChain()
+		prs[60] = &fakePR{Number: 60, Title: "dup", BaseRef: "main", HeadRef: "t1", HeadSha: "sha60", State: "open"}
+		fc, plan := newPlan(newFake(t, prs), 58)
+		err := fc.planDirect(context.Background(), "goliac", plan)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "the stack is ambiguous")
+	})
+
+	t.Run("the PR below became a draft", func(t *testing.T) {
+		prs := fixturePlainChain()
+		prs[57].Draft = true
+		fc, plan := newPlan(newFake(t, prs), 58)
+		err := fc.planDirect(context.Background(), "goliac", plan)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "the PR below: PR #57 is a draft")
+	})
+
+	t.Run("listing the PR below or the PRs above fails", func(t *testing.T) {
+		for _, failing := range []string{"head=", "base="} {
+			gh := newFake(t, fixturePlainChain())
+			fc, plan := newPlan(gh, 58)
+			gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+				if call.Method == "GET" && call.Endpoint == "/repos/myorg/goliac/pulls" && strings.Contains(call.Parameters, failing) {
+					return httpError("500 Internal Server Error", `{}`)
+				}
+				return nil, nil
+			}
+			assert.NotNil(t, fc.planDirect(context.Background(), "goliac", plan), failing)
+		}
+	})
+}
+
+func TestForcemergeGithubStackWaitsForGithubsRetarget(t *testing.T) {
+	merged := &pullRequestInfo{Number: 4}
+	merged.Base.Ref, merged.Head.Ref = "main", "b4"
+	requested := &pullRequestInfo{Number: 3}
+
+	t.Run("reading the PR above fails every time", func(t *testing.T) {
+		gh := newFake(t, fixtureStack())
+		gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+			return httpError("500 Internal Server Error", `{}`)
+		}
+		fc, clock := newForcemergeForTest(t, gh)
+		_, err := fc.retargetAfterMerge(context.Background(), "goliac", requested, merged, []*pullRequestInfo{{Number: 3}})
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "GitHub did not retarget")
+		assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, clock.slept())
+	})
+
+	t.Run("the context is cancelled while waiting", func(t *testing.T) {
+		gh := newFake(t, fixtureStack())
+		fc, _ := newForcemergeForTest(t, gh)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := fc.retargetAfterMerge(ctx, "goliac", requested, merged, []*pullRequestInfo{{Number: 3}})
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "context canceled")
+	})
+
+	t.Run("the PR above was closed meanwhile: nothing to wait for", func(t *testing.T) {
+		prs := fixtureStack()
+		prs[3].State = "closed"
+		gh := newFake(t, prs)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := fc.retargetAfterMerge(context.Background(), "goliac", requested, merged, []*pullRequestInfo{{Number: 3}})
+		assert.Nil(t, err)
+	})
+}
+
+func TestGithubErrorDetail(t *testing.T) {
+	assert.Equal(t, "boom", githubErrorDetail([]byte(`{"message":"boom"}`)))
+	assert.Equal(t, "deep", githubErrorDetail([]byte(`{"message":"boom","details":{"message":"deep"}}`)))
+	assert.Equal(t, "", githubErrorDetail([]byte(`not json`)))
 }
