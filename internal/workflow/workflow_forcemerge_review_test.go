@@ -442,3 +442,29 @@ func TestForcemergeF10WaitForGithubRetarget(t *testing.T) {
 		assert.LessOrEqual(t, total(clock), 60*time.Second)
 	})
 }
+
+func TestForcemergeSquashAdviceFitsTheStack(t *testing.T) {
+	t.Run("GitHub stack on a squash-only repository: no top-down advice (it would be refused too)", func(t *testing.T) {
+		for _, tc := range []struct {
+			from int
+			mode string
+		}{{3, MergeModeStack}, {4, ""}} {
+			gh := newFake(t, fixtureStack()).squashOnly()
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, tc.from, "because", tc.mode)
+			assert.NotNil(t, err)
+			if err != nil {
+				assert.Contains(t, err.Error(), "This is a GitHub stack")
+				assert.NotContains(t, err.Error(), "from the top down with the direct mode")
+			}
+			assertNothingChanged(t, gh)
+		}
+	})
+	t.Run("inferred stack: the top-down advice is given", func(t *testing.T) {
+		gh := newFake(t, fixtureStackPlain()).squashOnly()
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 3, "because", MergeModeStack)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "from the top down with the direct mode")
+	})
+}

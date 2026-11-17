@@ -384,4 +384,3 @@ func chainFixture(n int, base string, headFmt string) map[int]*fakePR {
 	}
 	return prs
 }
-

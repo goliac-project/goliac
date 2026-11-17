@@ -987,7 +987,7 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 			return nil, fmt.Errorf("nothing merged: %v", err)
 		}
 		if len(plan.stack) >= 2 && plan.method != "merge" {
-			return nil, fmt.Errorf("nothing merged: the stack of %d PRs would be merged one at a time with the %q method (the repository allows no merge commit, or /squash was asked): squash and rebase rewrite the commits of each PR, so the PRs above it, which carry the original commits, would conflict once retargeted. Allow merge commits in the repository, or merge the PRs from the top down with the direct mode", len(plan.stack), plan.method)
+			return nil, fmt.Errorf("nothing merged: the stack of %d PRs would be merged one at a time with the %q method (the repository allows no merge commit, or /squash was asked): squash and rebase rewrite the commits of each PR, so the PRs above it, which carry the original commits, would conflict once retargeted. %s", len(plan.stack), plan.method, squashAdvice(pr))
 		}
 		return plan, nil
 	}
@@ -995,9 +995,18 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 		return nil, fmt.Errorf("nothing merged: %v", err)
 	}
 	if pr.isStackBottom() && plan.method != "merge" && len(plan.children) > 0 {
-		return nil, fmt.Errorf("nothing merged: PR #%d would be %s-merged into %s while %s are open above it: that rewrites the commits they carry (the PRs above would then conflict with the rewritten history). Merge the PRs from the top down first (each into its parent branch, as a merge commit), or allow merge commits in the repository", pr.Number, plan.method, pr.Base.Ref, prNumbers(plan.children))
+		return nil, fmt.Errorf("nothing merged: PR #%d would be %s-merged into %s while %s are open above it: that rewrites the commits they carry (the PRs above would then conflict with the rewritten history). %s", pr.Number, plan.method, pr.Base.Ref, prNumbers(plan.children), squashAdvice(pr))
 	}
 	return plan, nil
+}
+
+// squashAdvice says what to do when a stack can't be merged with squash or rebase. A GitHub stack can't be merged
+// from the top down (GitHub refuses a direct merge of a PR that is not the bottom one): only the repository settings help.
+func squashAdvice(pr *pullRequestInfo) string {
+	if pr.stackInferred {
+		return "Allow merge commits in the repository, or merge the PRs from the top down with the direct mode (each into its parent branch, as a merge commit)."
+	}
+	return "This is a GitHub stack: GitHub does not support merging a PR out of the middle of a stack, so the top-down way is not available either. Allow merge commits in the repository for the time of the force merge, or unstack the PRs first."
 }
 
 // planStack walks the whole stack (top to bottom) and validates every PR
