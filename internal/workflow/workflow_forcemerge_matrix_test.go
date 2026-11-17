@@ -174,7 +174,12 @@ func TestForcemergeGithubStackWaitsForGithubsRetarget(t *testing.T) {
 		_, err := fc.retargetAfterMerge(context.Background(), "goliac", requested, merged, []*pullRequestInfo{{Number: 3}})
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "GitHub did not retarget")
-		assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, clock.slept())
+		var total time.Duration
+		for _, d := range clock.slept() {
+			total += d
+		}
+		assert.LessOrEqual(t, total, 60*time.Second)
+		assert.GreaterOrEqual(t, total, 50*time.Second, "GitHub's retarget is waited for about 60s")
 	})
 
 	t.Run("the context is cancelled while waiting", func(t *testing.T) {

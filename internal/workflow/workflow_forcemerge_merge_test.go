@@ -346,7 +346,7 @@ func TestForcemergeMergePRDirect(t *testing.T) {
 		_, err := mergePR(fc, 4, "because", "")
 		assert.NotNil(t, err)
 		if err != nil {
-			assert.Contains(t, err.Error(), "PR #4 is merged, but GitHub did not retarget the PRs above it onto main (PR #3: it is still based on b4)")
+			assert.Contains(t, err.Error(), "PR #4 is merged, but GitHub did not retarget the PRs above it onto main (PR #3: it is still based on b4 after 1m0s)")
 		}
 		assert.Empty(t, gh.find("PATCH", "/pulls/3"))
 	})
@@ -427,13 +427,13 @@ func TestForcemergeMergePRDirect(t *testing.T) {
 		}
 		fc, _ := newForcemergeForTest(t, gh)
 
-		_, err := mergePR(fc, 4, "because /squash", MergeModeDirect)
+		_, err := mergePR(fc, 4, "because", MergeModeDirect)
 		assert.Nil(t, err)
 		assert.Equal(t, 3, polls)
 
 		asyncCalls := gh.find("PUT", "/pulls/4/merge-async")
 		assert.Equal(t, 1, len(asyncCalls))
-		assert.Equal(t, "squash", asyncCalls[0].Body["merge_method"])
+		assert.Equal(t, "merge", asyncCalls[0].Body["merge_method"])
 		assert.Equal(t, "direct_merge", asyncCalls[0].Body["merge_action"])
 		assert.Equal(t, true, asyncCalls[0].Body["bypass_rules"])
 		assert.Equal(t, "sha4", asyncCalls[0].Body["sha"])
@@ -449,15 +449,14 @@ func TestForcemergeMergePRDirect(t *testing.T) {
 		assert.Equal(t, 0, len(gh.find("POST", "/comments")))
 	})
 
-	t.Run("bottom PR 4 on a squash-only repository: squash used (no merge commit asked)", func(t *testing.T) {
+	t.Run("bottom PR 4 on a squash-only repository with PRs above: refused up front (F5)", func(t *testing.T) {
 		gh := newFake(t, fixtureStackPlain()).squashOnly()
 		gh.asyncMerge = okJSON(asyncMerged)
 		fc, _ := newForcemergeForTest(t, gh)
 
 		_, err := mergePR(fc, 4, "because", "")
-		assert.Nil(t, err)
-		assert.Equal(t, "squash", gh.find("PUT", "/merge-async")[0].Body["merge_method"])
-		assert.Equal(t, "main", gh.pr(3).BaseRef)
+		assert.NotNil(t, err)
+		assertNothingChanged(t, gh)
 	})
 
 	t.Run("bottom PR 4: settings unreadable fails closed before the approval", func(t *testing.T) {
@@ -815,7 +814,6 @@ func TestForcemergeRestack(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, "main", gh.pr(3).BaseRef)
 		assert.Equal(t, 0, len(gh.find("PATCH", "")), "Goliac patches nothing")
-		assert.Equal(t, 1, len(gh.find("GET", "/pulls/3")), "only PR 3 was waited for")
 		assert.Equal(t, 0, len(gh.find("GET", "/pulls/8")))
 	})
 
@@ -828,9 +826,10 @@ func TestForcemergeRestack(t *testing.T) {
 			return nil, nil
 		}
 		_, err := mergePR(fc, 3, "because", "")
-		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), "it is now based on elsewhere")
+		// the PRs above are listed again after the merge: PR 2 is not based on the merged branch anymore, it is left alone
+		assert.Nil(t, err)
 		assert.Equal(t, 0, len(gh.find("PATCH", "/pulls/2")))
+		assert.Equal(t, "elsewhere", gh.pr(2).BaseRef)
 	})
 
 	t.Run("a child already retargeted or closed is fine", func(t *testing.T) {
@@ -1028,7 +1027,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 				gh.asyncMerge = okJSON(asyncMerged)
 				fc, _ := newForcemergeForTest(t, gh)
 
-				summary, err := mergePR(fc, from, "ship it /squash", MergeModeStack)
+				summary, err := mergePR(fc, from, "ship it", MergeModeStack)
 				assert.Nil(t, err)
 				assert.Contains(t, summary, "Force merged (stack) into `main`: #1 PR 1 (by author1), #2 PR 2 (by author2), #3 PR 3 (by author3), #4 PR 4 (by author4)")
 
@@ -1038,7 +1037,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 					assert.Equal(t, "APPROVE", r.Body["event"])
 					assert.Equal(t, fmt.Sprintf("sha%d", n), r.Body["commit_id"])
 					assert.Equal(t,
-						fmt.Sprintf("Force merge via Goliac on behalf of test-user.\n\nPR #%d: PR %d\nhttps://github.com/myorg/goliac/pull/%d\n\nship it \n\nMerge mode: `stack`. Merging the whole stack (4 PRs, #1 to #4) into `main`, requested on PR #%d. Stack source: GitHub stack metadata. GitHub only lets Goliac bypass the rules on the bottom-most unmerged PR of a stack, so the PRs are merged one at a time from the bottom (#4) up, each PR being retargeted onto `main` once the PR below it is merged.", n, n, n, from),
+						fmt.Sprintf("Force merge via Goliac on behalf of test-user.\n\nPR #%d: PR %d\nhttps://github.com/myorg/goliac/pull/%d\n\nship it\n\nMerge mode: `stack`. Merging the whole stack (4 PRs, #1 to #4) into `main`, requested on PR #%d. Stack source: GitHub stack metadata. GitHub only lets Goliac bypass the rules on the bottom-most unmerged PR of a stack, so the PRs are merged one at a time from the bottom (#4) up, each PR being retargeted onto `main` once the PR below it is merged.", n, n, n, from),
 						r.Body["body"])
 				}
 
@@ -1051,7 +1050,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 					}
 					assert.Equal(t, fmt.Sprintf("/repos/myorg/goliac/pulls/%d/merge-async", n), asyncCalls[i].Endpoint)
 					assert.Equal(t, fmt.Sprintf("sha%d", n), asyncCalls[i].Body["sha"])
-					assert.Equal(t, "squash", asyncCalls[i].Body["merge_method"])
+					assert.Equal(t, "merge", asyncCalls[i].Body["merge_method"])
 					assert.Equal(t, "direct_merge", asyncCalls[i].Body["merge_action"])
 					assert.Equal(t, true, asyncCalls[i].Body["bypass_rules"])
 					assert.Contains(t, asyncCalls[i].Body["commit_title"], fmt.Sprintf("PR %d (force merged PR %d by test-user)", n, n))
@@ -1085,12 +1084,12 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		gh.deleteBranchOnMerge = true
 		gh.asyncMerge = func(call restCall) ([]byte, error) {
 			if strings.Contains(call.Endpoint, "/pulls/3/") {
-				return httpError("405 Method Not Allowed", `{"message":"Squash not allowed"}`)
+				return httpError("422 Unprocessable Entity", `{"message":"Validation Failed"}`)
 			}
 			return []byte(asyncMerged), nil
 		}
 		fc, _ := newForcemergeForTest(t, gh)
-		_, err := mergePR(fc, 2, "ship it /squash", MergeModeStack)
+		_, err := mergePR(fc, 2, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
 		if err != nil {
 			assert.Contains(t, err.Error(), "already merged into `main`: #4; not merged: #3, #2, #1")
@@ -1111,20 +1110,20 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
 		if err != nil {
-			assert.Contains(t, err.Error(), "PR #4 is merged, but GitHub did not retarget the PRs above it onto main (PR #3: it is still based on b4)")
+			assert.Contains(t, err.Error(), "PR #4 is merged, but GitHub did not retarget the PRs above it onto main (PR #3: it is still based on b4 after 1m0s)")
 			assert.Contains(t, err.Error(), "already merged into `main`: #4; not merged: #3, #2, #1")
 		}
 		assert.Equal(t, 0, len(gh.find("PATCH", "")))
 		assert.Equal(t, 3, len(gh.find("PUT", "/dismissals")))
 	})
 
-	t.Run("squash-only repository: squash for the stack (default method replaced)", func(t *testing.T) {
+	t.Run("squash-only repository: the stack is refused up front (F5)", func(t *testing.T) {
 		gh := newFake(t, fixtureStack()).squashOnly()
 		gh.asyncMerge = okJSON(asyncMerged)
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 3, "ship it", MergeModeStack)
-		assert.Nil(t, err)
-		assert.Equal(t, "squash", gh.find("PUT", "/merge-async")[0].Body["merge_method"])
+		assert.NotNil(t, err)
+		assertNothingChanged(t, gh)
 	})
 
 	t.Run("async 'merge' refused as not allowed: squash fallback like the sync path", func(t *testing.T) {
@@ -1163,16 +1162,24 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		_, err = mergePR(fc2, 3, "ship it", MergeModeStack)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "validation failed")
-		assert.Equal(t, 1, len(gh2.find("PUT", "/merge-async")))
+		assert.Equal(t, 4, len(gh2.find("PUT", "/merge-async")), "retried with the same method, then refused with GitHub's message")
 	})
 
-	t.Run("explicit /squash refused as not allowed: no fallback, error", func(t *testing.T) {
+	t.Run("explicit /squash on a stack is refused up front (F5)", func(t *testing.T) {
 		gh := newFake(t, fixtureStack()).allMethods()
-		gh.asyncMerge = func(call restCall) ([]byte, error) {
-			return httpError("405 Method Not Allowed", `{"message":"Squash not allowed"}`)
-		}
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 3, "ship it /squash", MergeModeStack)
+		assert.NotNil(t, err)
+		assertNothingChanged(t, gh)
+	})
+
+	t.Run("explicit squash refused as not allowed by GitHub: no fallback, error", func(t *testing.T) {
+		gh := newFake(t, fixtureStack()).allMethods()
+		gh.asyncMerge = func(call restCall) ([]byte, error) {
+			return httpError("405 Method Not Allowed", `{"message":"Squash merges are not allowed on this repository."}`)
+		}
+		fc, _ := newForcemergeForTest(t, gh)
+		err := fc.mergePRAsync(context.Background(), "goliac", 4, "sha4", "t", "m", "squash", true)
 		assert.NotNil(t, err)
 		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")))
 	})
@@ -1205,7 +1212,7 @@ func TestForcemergeMergePRStack(t *testing.T) {
 		"draft":          func(p *fakePR) { p.Draft = true },
 		"fork head":      func(p *fakePR) { p.HeadRepo = "someone/goliac" },
 		"state not open": func(p *fakePR) { p.State = "" },
-		"merged":         func(p *fakePR) { p.Merged = true },
+		"merged":         func(p *fakePR) { p.Merged, p.State = true, "closed" }, // (the list of GitHub has no "merged" field: the state tells)
 	} {
 		for _, n := range []int{1, 2, 4} { // above, mid, below the commented PR 3
 			t.Run(fmt.Sprintf("PR %d of the stack is %s: refused before any side effect", n, name), func(t *testing.T) {
@@ -1462,7 +1469,6 @@ func TestForcemergeAsyncMerge(t *testing.T) {
 		"403": "refused (permissions or rules)",
 		"404": "not found",
 		"422": "validation failed",
-		"500": "error merging the PR asynchronously",
 	} {
 		t.Run("HTTP "+status, func(t *testing.T) {
 			gh := fresh(t)
@@ -1483,6 +1489,15 @@ func TestForcemergeAsyncMerge(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "not ready to be merged (GitHub says: Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack.)")
 		assert.NotContains(t, err.Error(), "closed or draft?")
+	})
+
+	t.Run("HTTP 500: the outcome is unknown, the approval is left", func(t *testing.T) {
+		gh := fresh(t)
+		gh.asyncMerge = func(call restCall) ([]byte, error) { return httpError("500 Whatever", `{"message":"boom"}`) }
+		err, gh := run(t, gh)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "the outcome is unknown, GitHub may have merged it")
+		assert.Equal(t, 0, len(gh.find("PUT", "/dismissals")))
 	})
 
 	t.Run("an existing foreign request (409) is not adopted", func(t *testing.T) {

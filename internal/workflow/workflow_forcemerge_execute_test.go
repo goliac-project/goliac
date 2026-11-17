@@ -235,9 +235,10 @@ func TestForcemergeInFlightGuard(t *testing.T) {
 		assert.Nil(t, <-done)
 		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/32/merge")), "merged once")
 
-		// the lock is released
+		// the lock is released (the PR is merged now, so a new request is refused for that reason, not for the lock)
 		_, err = exec(fc, 32, "", false)
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "already merged")
 	})
 
 	t.Run("a stack merge also guards the other PRs of the stack", func(t *testing.T) {

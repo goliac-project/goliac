@@ -102,19 +102,58 @@ func TestForcemergeInferredStack(t *testing.T) {
 		})
 	}
 
-	t.Run("stack mode, squash-only repository: every PR squashed into main", func(t *testing.T) {
+	t.Run("stack mode, squash-only repository: refused up front, nothing approved (F5)", func(t *testing.T) {
 		gh := newFake(t, fixturePlainChain()).squashOnly()
 		gh.asyncMerge = okJSON(asyncMerged)
 		fc, _ := newForcemergeForTest(t, gh)
 
 		_, err := mergePR(fc, 58, "ship it", MergeModeStack)
+		assert.NotNil(t, err)
+		if err != nil {
+			assert.Contains(t, err.Error(), `nothing merged: the stack of 3 PRs would be merged one at a time with the "squash" method`)
+			assert.Contains(t, err.Error(), "rewrite the commits of each PR")
+		}
+		assertNothingChanged(t, gh)
+	})
+
+	t.Run("stack mode with /squash is refused too (squash rewrites the commits of the PRs above)", func(t *testing.T) {
+		gh := newFake(t, fixturePlainChain()).allMethods()
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 58, "ship it /squash", MergeModeStack)
+		assert.NotNil(t, err)
+		assertNothingChanged(t, gh)
+	})
+
+	t.Run("direct on the bottom PR with PRs above, squash-only repository: refused; on a mid or top PR (merge commit): fine", func(t *testing.T) {
+		gh := newFake(t, fixturePlainChain()).squashOnly()
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 57, "ship it", "")
+		assert.NotNil(t, err)
+		if err != nil {
+			assert.Contains(t, err.Error(), "rewrites the commits they carry")
+		}
+		assertNothingChanged(t, gh)
+
+		for _, n := range []int{59, 58} { // top first, then the middle one: top down
+			gh := newFake(t, fixturePlainChain()).squashOnly()
+			gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
+			gh.markMergedOnBranchMerge = true
+			fc, _ := newForcemergeForTest(t, gh)
+			_, err := mergePR(fc, n, "ship it", "")
+			assert.Nil(t, err, "PR %d", n)
+		}
+	})
+
+	t.Run("squash-only repository, bottom PR with nothing above: squashed (a single PR is not a stack)", func(t *testing.T) {
+		prs := fixturePlainChain()
+		delete(prs, 58)
+		delete(prs, 59)
+		gh := newFake(t, prs).squashOnly()
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		fc, _ := newForcemergeForTest(t, gh)
+		_, err := mergePR(fc, 57, "ship it", MergeModeStack)
 		assert.Nil(t, err)
-		for _, c := range gh.find("PUT", "/merge-async") {
-			assert.Equal(t, "squash", c.Body["merge_method"])
-		}
-		for _, n := range []int{57, 58, 59} {
-			assert.Equal(t, "main", gh.pr(n).MergedInto)
-		}
+		assert.Equal(t, "squash", gh.find("PUT", "/pulls/57/merge")[0].Body["merge_method"])
 	})
 
 	t.Run("stack mode, the second merge fails: #57 is reported merged, the approvals of #58 and #59 are dismissed", func(t *testing.T) {
@@ -290,11 +329,27 @@ func TestForcemergeInferredStack(t *testing.T) {
 			60: {Number: 60, Title: "t3", Author: "a60", BaseRef: "t2", HeadRef: "t3", HeadSha: "sha60", State: "open"},
 		}
 		gh := newFake(t, prs).allMethods()
+		gh.branchTips = map[string]string{"t2": "moved-on-since-the-merge"}
 		gh.syncMerge = okJSON(`{"merged":true}`)
 		fc, _ := newForcemergeForTest(t, gh)
 		_, err := mergePR(fc, 60, "ship it", "")
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/60/merge")))
+
+		// F7: the branch of the merged PR was kept and not pushed since the merge: nothing may be merged into it
+		prs = map[int]*fakePR{
+			58: {Number: 58, Title: "t2", BaseRef: "main", HeadRef: "t2", HeadSha: "sha58", State: "closed", Merged: true},
+			60: {Number: 60, Title: "t3", Author: "a60", BaseRef: "t2", HeadRef: "t3", HeadSha: "sha60", State: "open"},
+		}
+		gh = newFake(t, prs).allMethods()
+		gh.branchTips = map[string]string{"t2": "sha58"}
+		fc, _ = newForcemergeForTest(t, gh)
+		_, err = mergePR(fc, 60, "ship it", "")
+		assert.NotNil(t, err)
+		if err != nil {
+			assert.Contains(t, err.Error(), "which is already merged (the branch was kept) and whose branch was not pushed since")
+		}
+		assert.Empty(t, gh.sideEffects())
 	})
 
 	// the base branch is only dead when the newest PR of the branch is closed unmerged AND the tip is still its head
@@ -321,8 +376,11 @@ func TestForcemergeInferredStack(t *testing.T) {
 
 	t.Run("a branch whose newest PR is merged, with an older closed one: merged as usual", func(t *testing.T) {
 		newer := &fakePR{Number: 20, Title: "newer", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "old-tip", State: "closed", Merged: true}
-		err := liveBranch(t, map[int]*fakePR{10: oldClosed(), 20: newer}, map[string]string{"release/1.0": "old-tip"})
+		err := liveBranch(t, map[int]*fakePR{10: oldClosed(), 20: newer}, map[string]string{"release/1.0": "moved-on"})
 		assert.Nil(t, err)
+		// F7: the same branch with the tip still on the merged PR's head is dead
+		err = liveBranch(t, map[int]*fakePR{10: oldClosed(), 20: newer}, map[string]string{"release/1.0": "old-tip"})
+		assert.NotNil(t, err)
 	})
 
 	t.Run("a branch whose newest PR is closed unmerged but an older one was merged, tip unchanged: refused", func(t *testing.T) {

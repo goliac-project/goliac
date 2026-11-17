@@ -47,6 +47,9 @@ type fakePR struct {
 	StackBase     string
 	// raw stack payload overriding the above
 	RawStack interface{}
+	// NotMergeableYet: the next N merge attempts answer 405 "Pull Request is not mergeable" (GitHub computes
+	// "mergeable" lazily, e.g. just after a retarget)
+	NotMergeableYet int
 	// the branch the PR landed in when GitHub merged it ("" while not merged by the fake)
 	MergedInto string
 }
@@ -176,9 +179,15 @@ type fakeGitHub struct {
 	autoRetargetLate    bool
 	pendingRetarget     map[int]string // PR number -> new base
 	pendingSeen         map[int]bool
+	pendingReads        map[int]int
+	// lateReads: reads of a PR of a GitHub stack before GitHub's own retarget lands (0 = after the first read)
+	lateReads int
 
 	// branchTips: tip sha of the branches (GET /branches/{b}); a missing branch answers 404
 	branchTips map[string]string
+
+	// head sha of the PRs at the time of each synchronous merge (what GitHub really merges)
+	syncMergedHeads []string
 
 	reviewSeq  int64
 	violations []string
@@ -396,8 +405,10 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			// GitHub's own retarget of a PR of a stack (Goliac never patches it) lands after the first read
 			if f.pendingSeen == nil {
 				f.pendingSeen = map[int]bool{}
+				f.pendingReads = map[int]int{}
 			}
-			if f.pendingSeen[n] {
+			f.pendingReads[n]++
+			if f.pendingSeen[n] && f.pendingReads[n] > f.lateReads+1 {
 				pr.BaseRef = into
 				delete(f.pendingRetarget, n)
 			}
@@ -424,14 +435,34 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			if h := q.Get("head"); h != "" && pr.headLabel() != h {
 				continue
 			}
-			res = append(res, pr.payload())
+			item := pr.payload()
+			delete(item, "merged") // like GitHub: the list items have merged_at but no "merged" field
+			res = append(res, item)
 		}
 		if q.Get("sort") == "created" && q.Get("direction") == "desc" {
 			sort.SliceStable(res, func(i, j int) bool { return res[i]["number"].(int) > res[j]["number"].(int) })
 		}
-		if pp, err := strconv.Atoi(q.Get("per_page")); err == nil && len(res) > pp {
-			res = res[:pp]
+		// pagination like GitHub: 30 per page by default, 100 at most
+		perPage := 30
+		if pp, err := strconv.Atoi(q.Get("per_page")); err == nil && pp > 0 {
+			perPage = pp
+			if perPage > 100 {
+				perPage = 100
+			}
 		}
+		page := 1
+		if pg, err := strconv.Atoi(q.Get("page")); err == nil && pg > 0 {
+			page = pg
+		}
+		start := (page - 1) * perPage
+		if start > len(res) {
+			start = len(res)
+		}
+		end := start + perPage
+		if end > len(res) {
+			end = len(res)
+		}
+		res = res[start:end]
 		return json.Marshal(res)
 
 	case method == "GET" && strings.HasPrefix(endpoint, "/repos/myorg/goliac/branches/"):
@@ -475,7 +506,7 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 				// live: GitHub refuses to change the base of a PR of a stack
 				return httpError("422 Unprocessable Entity", `{"message":"Validation Failed","errors":[{"message":"Cannot change the base branch because the pull request is part of a stack.","resource":"PullRequest","field":"base","code":"invalid"}]}`)
 			}
-			if f.deleteBranchOnMerge && base == pr.BaseRef {
+			if base == pr.BaseRef {
 				// GitHub refuses a base change onto the current base when a PR with this head and base exists
 				return httpError("422 Unprocessable Entity", fmt.Sprintf(`{"message":"Validation Failed","errors":[{"message":"A pull request already exists for base branch '%s' and head branch '%s'","resource":"PullRequest","field":"base","code":"invalid"}]}`, base, pr.HeadRef))
 			}
@@ -487,7 +518,36 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		return json.Marshal(pr.payload())
 
 	case method == "PUT" && syncPath.MatchString(endpoint):
-		return hook(syncMerge)
+		n, _ := strconv.Atoi(syncPath.FindStringSubmatch(endpoint)[1])
+		f.mu.Lock()
+		pr := f.prs[n]
+		var refusal []byte
+		var refusalErr error
+		if pr != nil {
+			if sha, ok := body["sha"].(string); ok && sha != pr.HeadSha {
+				// live: 409 when the sha does not match the head of the PR
+				refusal, refusalErr = httpError("409 Conflict", `{"message":"Head branch was modified. Review and try the merge again.","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"409"}`)
+			} else if pr.NotMergeableYet > 0 {
+				pr.NotMergeableYet--
+				refusal, refusalErr = httpError("405 Method Not Allowed", `{"message":"Pull Request is not mergeable","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"405"}`)
+			}
+		}
+		f.mu.Unlock()
+		if refusalErr != nil {
+			return refusal, refusalErr
+		}
+		if pr != nil {
+			f.mu.Lock()
+			f.syncMergedHeads = append(f.syncMergedHeads, pr.HeadSha)
+			f.mu.Unlock()
+		}
+		res, err := hook(syncMerge)
+		if err == nil && pr != nil && strings.Contains(string(res), `"merged":true`) {
+			f.mu.Lock()
+			pr.Merged, pr.State, pr.MergedInto = true, "closed", pr.BaseRef
+			f.mu.Unlock()
+		}
+		return res, err
 
 	case method == "POST" && endpoint == "/repos/myorg/goliac/merges":
 		res, err := hook(branchMerge)
@@ -514,6 +574,18 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 			if notBottom {
 				// live: "Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."
 				return httpError("400 Bad Request", `{"status":"failed","details":{"message":"Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."}}`)
+			}
+		}
+		if n, _ := strconv.Atoi(asyncPath.FindStringSubmatch(endpoint)[1]); true {
+			f.mu.Lock()
+			pr := f.prs[n]
+			lazy := pr != nil && pr.NotMergeableYet > 0
+			if lazy {
+				pr.NotMergeableYet--
+			}
+			f.mu.Unlock()
+			if lazy {
+				return httpError("405 Method Not Allowed", `{"message":"Pull Request is not mergeable","status":"405"}`)
 			}
 		}
 		res, err := hook(asyncMerge)
