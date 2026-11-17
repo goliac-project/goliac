@@ -163,8 +163,38 @@ type fakeGitHub struct {
 	// neverMarkMerged: the asynchronous merge says merged but the PR stays open
 	neverMarkMerged bool
 
+	// deleteBranchOnMerge simulates the repository setting delete_branch_on_merge: once a PR is merged
+	// GitHub deletes its head branch and retargets the open PRs based on it onto the base branch of the
+	// merged PR (an AutomaticBaseChangeSucceededEvent). The retarget lands at once, unless
+	// autoRetargetLate is set: it then lands just before the next PATCH of the PR (after the read that
+	// preceded it), like GitHub's asynchronous retarget racing with the client.
+	deleteBranchOnMerge bool
+	autoRetargetLate    bool
+	pendingRetarget     map[int]string // PR number -> new base
+
 	reviewSeq  int64
 	violations []string
+}
+
+// afterMerge applies what GitHub does after a PR merged into into (f.mu must be held)
+func (f *fakeGitHub) afterMerge(merged *fakePR, into string) {
+	if !f.deleteBranchOnMerge {
+		return
+	}
+	for _, n := range f.sortedNumbers() {
+		child := f.prs[n]
+		if child.State != "open" || child.BaseRef != merged.HeadRef {
+			continue
+		}
+		if f.autoRetargetLate {
+			if f.pendingRetarget == nil {
+				f.pendingRetarget = map[int]string{}
+			}
+			f.pendingRetarget[n] = into
+		} else {
+			child.BaseRef = into
+		}
+	}
 }
 
 var (
@@ -391,7 +421,15 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		if pr == nil {
 			return httpError("404 Not Found", `{"message":"Not Found"}`)
 		}
+		if into, ok := f.pendingRetarget[n]; ok {
+			pr.BaseRef = into
+			delete(f.pendingRetarget, n)
+		}
 		if base, ok := body["base"].(string); ok {
+			if f.deleteBranchOnMerge && base == pr.BaseRef {
+				// GitHub refuses a base change onto the current base when a PR with this head and base exists
+				return httpError("422 Unprocessable Entity", fmt.Sprintf(`{"message":"Validation Failed","errors":[{"message":"A pull request already exists for base branch '%s' and head branch '%s'","resource":"PullRequest","field":"base","code":"invalid"}]}`, base, pr.HeadRef))
+			}
 			pr.BaseRef = base
 		}
 		if state, ok := body["state"].(string); ok {
@@ -411,6 +449,7 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 					pr.Merged = true
 					pr.State = "closed"
 					pr.MergedInto, _ = body["base"].(string)
+					f.afterMerge(pr, pr.MergedInto)
 				}
 			}
 			f.mu.Unlock()
@@ -471,6 +510,7 @@ func (f *fakeGitHub) noteAsync(endpoint string, res []byte, err error) {
 		p.Merged = true
 		p.State = "closed"
 		p.MergedInto = into
+		f.afterMerge(p, into)
 	}
 }
 

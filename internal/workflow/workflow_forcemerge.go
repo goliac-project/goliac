@@ -1294,6 +1294,15 @@ func (g *ForcemergeImpl) restack(ctx context.Context, repo string, pr *pullReque
 					break
 				}
 				lastErr = fmt.Errorf("%v (%s)", err, string(body))
+				if httpStatus(err) == 422 {
+					// GitHub answers 422 when the base is already the target: with delete_branch_on_merge it
+					// retargets the PRs above a merged PR by itself, possibly between our read and our PATCH.
+					// If the PR is on the target now, it is a success.
+					if again, rerr := g.fetchPullRequest(ctx, repo, strconv.Itoa(child.Number)); rerr == nil && again.Base.Ref == pr.Base.Ref {
+						retargeted = true
+						break
+					}
+				}
 				if st := httpStatus(err); st >= 400 && st < 500 && st != 408 && st != 429 {
 					// a refusal (e.g. 422: GitHub may refuse to change the base of a PR that is still in a stack)
 					// does not go away by retrying
