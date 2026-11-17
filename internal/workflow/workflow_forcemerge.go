@@ -208,7 +208,10 @@ func (g *ForcemergeImpl) ExecuteWorkflow(ctx context.Context, repoconfigForceMer
 			if err != nil {
 				return nil, fmt.Errorf("error when executing step %s: %v", step.Name, err)
 			}
-			responses = append(responses, resp)
+			if strings.TrimSpace(resp) != "" {
+				// (an empty answer would show as an empty bullet in the comment)
+				responses = append(responses, resp)
+			}
 		}
 	}
 
@@ -1661,6 +1664,23 @@ func (g *ForcemergeImpl) mergePRSync(ctx context.Context, repo, prNumber, commit
 		nil)
 }
 
+// githubErrorDetail returns the human message of a GitHub error body ({"message": ...} or {"details": {"message": ...}})
+func githubErrorDetail(body []byte) string {
+	var e struct {
+		Message string `json:"message"`
+		Details struct {
+			Message string `json:"message"`
+		} `json:"details"`
+	}
+	if json.Unmarshal(body, &e) != nil {
+		return ""
+	}
+	if e.Details.Message != "" {
+		return e.Details.Message
+	}
+	return e.Message
+}
+
 // isStackedPRRefusal detects the 403 GitHub returns when a stacked PR is merged
 // through the synchronous merge endpoint:
 // "Merging stacked PRs via this endpoint is not supported. Use the asynchronous merge endpoint instead."
@@ -1741,7 +1761,12 @@ func (g *ForcemergeImpl) mergePRAsyncWith(ctx context.Context, repo string, prNu
 			// not ours: adopting it would report a merge we did not request (other method, other message)
 			return indeterminatef("another asynchronous merge is already pending for PR #%d (request %q): Goliac does not adopt it. Wait for it or cancel it, then retry: %v (%s)", prNumber, uuid, err, string(body))
 		case 400:
-			return fmt.Errorf("error merging the PR asynchronously: the PR is not ready to be merged (closed or draft?): %v (%s)", err, string(body))
+			reason := "closed or draft?"
+			if detail := githubErrorDetail(body); detail != "" {
+				// e.g. "Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."
+				reason = "GitHub says: " + detail
+			}
+			return fmt.Errorf("error merging the PR asynchronously: the PR is not ready to be merged (%s): %v (%s)", reason, err, string(body))
 		case 403:
 			return fmt.Errorf("error merging the PR asynchronously: refused (permissions or rules): %v (%s)", err, string(body))
 		case 404:

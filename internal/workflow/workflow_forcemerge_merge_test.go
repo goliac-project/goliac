@@ -1377,6 +1377,17 @@ func TestForcemergeAsyncMerge(t *testing.T) {
 		})
 	}
 
+	t.Run("HTTP 400 relays GitHub's own reason (e.g. rules can't be bypassed on a PR that is not the bottom of its stack)", func(t *testing.T) {
+		gh := fresh(t)
+		gh.asyncMerge = func(call restCall) ([]byte, error) {
+			return httpError("400 Bad Request", `{"status":"failed","details":{"message":"Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack."}}`)
+		}
+		err, _ := run(t, gh)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "not ready to be merged (GitHub says: Rules can only be bypassed when merging the bottom-most unmerged pull request in the stack.)")
+		assert.NotContains(t, err.Error(), "closed or draft?")
+	})
+
 	t.Run("an existing foreign request (409) is not adopted", func(t *testing.T) {
 		gh := fresh(t)
 		gh.asyncMerge = func(call restCall) ([]byte, error) { return httpError("409 Conflict", asyncPending) }

@@ -17,6 +17,8 @@ type recordingPlugin struct {
 	mu   sync.Mutex
 	urls []string
 	err  error
+	// empty: the step has nothing to report (an audit step, for instance)
+	empty bool
 }
 
 func (p *recordingPlugin) Execute(ctx context.Context, username, workflowDescription, explanation string, u *url.URL, properties map[string]interface{}) (string, error) {
@@ -25,6 +27,9 @@ func (p *recordingPlugin) Execute(ctx context.Context, username, workflowDescrip
 	p.urls = append(p.urls, u.String())
 	if p.err != nil {
 		return "", p.err
+	}
+	if p.empty {
+		return "", nil
 	}
 	return "step:" + u.Path, nil
 }
@@ -104,6 +109,17 @@ func TestForcemergeExecuteWorkflow(t *testing.T) {
 		res, err := exec(fc, 32, "", false)
 		assert.Nil(t, err)
 		assert.Equal(t, []string{"step:/myorg/goliac/pull/32"}, res)
+		assert.Equal(t, []string{prURL(32)}, plugin.urls)
+	})
+
+	t.Run("a step with nothing to report adds no (empty) line to the answer", func(t *testing.T) {
+		gh := newFake(t, fixturePlainPR())
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		plugin := &recordingPlugin{empty: true}
+		fc := executeFixture(t, gh, plugin)
+		res, err := exec(fc, 32, "", false)
+		assert.Nil(t, err)
+		assert.Empty(t, res)
 		assert.Equal(t, []string{prURL(32)}, plugin.urls)
 	})
 
