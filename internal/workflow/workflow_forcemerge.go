@@ -60,7 +60,9 @@ const (
 	defaultAsyncMergePollTimeout  = 2 * time.Minute
 	defaultGithubWait             = 60 * time.Second
 	defaultRequestTimeout         = 60 * time.Second
-	defaultForcemergeTimeout      = 10 * time.Minute
+	// each cleanup call (dismissing an approval...) gets its own timeout, whatever the state of the force merge deadline
+	cleanupTimeout           = 30 * time.Second
+	defaultForcemergeTimeout = 10 * time.Minute
 	// a PR list is read page by page (100 per page) up to this many pages
 	maxListPages           = 100
 	defaultRestackAttempts = 4
@@ -94,6 +96,30 @@ func forcemergeTimeout() time.Duration {
 	}
 	return defaultForcemergeTimeout
 }
+
+// extractSquashFlag finds the "/squash" flag of an explanation and removes it from the text. The flag is a word of its own
+// (possibly followed by punctuation, as in "fix prod /squash."): "/squashed" or "/squash-all" are explanation text.
+func extractSquashFlag(explanation string) (bool, string) {
+	found := false
+	var out strings.Builder
+	last := 0
+	for _, loc := range squashTokenRegex.FindAllStringIndex(explanation, -1) {
+		token := explanation[loc[0]:loc[1]]
+		trimmed := strings.TrimLeft(token, "(")
+		lead := len(token) - len(trimmed)
+		core := strings.TrimRight(trimmed, ".,;:!?)")
+		if core != "/squash" {
+			continue
+		}
+		found = true
+		out.WriteString(explanation[last : loc[0]+lead])
+		last = loc[0] + lead + len(core)
+	}
+	out.WriteString(explanation[last:])
+	return found, out.String()
+}
+
+var squashTokenRegex = regexp.MustCompile(`\S+`)
 
 // githubWait is how long to wait for GitHub to do its part after a merge (GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS, 60s)
 func githubWait() time.Duration {
@@ -196,7 +222,7 @@ func (g *ForcemergeImpl) ExecuteWorkflow(ctx context.Context, repoconfigForceMer
 	}
 
 	// "/squash" alone is a flag, not an explanation
-	if strings.TrimSpace(strings.ReplaceAll(explanation, "/squash", "")) == "" {
+	if _, text := extractSquashFlag(explanation); strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("an explanation is required (the /squash flag alone is not an explanation)")
 	}
 
@@ -727,7 +753,8 @@ func (g *ForcemergeImpl) chainPRsAbove(ctx context.Context, repo string, pr *pul
 
 // refuseDeadBase refuses a PR whose base branch is dead: the NEWEST PR (open, closed or merged, by creation date) whose
 // head is that branch is closed without being merged, and the tip of the branch is still that PR's head (nothing was
-// pushed since it was closed) and it is not protected (branch protection or any ruleset). Merging into it would strand the
+// pushed since it was closed) and it does not require pull requests (a ruleset with a pull_request rule, or classic branch
+// protection with no ruleset at all). Merging into it would strand the
 // change. A long-lived branch (release, develop) that
 // had a PR closed once but moved on, or whose newest PR is merged or open, is alive. A failing lookup refuses
 // (conservative, like the other lookups).
@@ -760,22 +787,29 @@ func (g *ForcemergeImpl) refuseDeadBase(ctx context.Context, repo string, pr *pu
 	if branch.Commit.Sha != c.Head.Sha {
 		return nil // the branch moved on since the PR was closed: alive
 	}
-	// a protected branch is never dead (a hotfix into a just-promoted release or develop branch): classic branch protection
-	// shows in the "protected" field of the branch; the rulesets that apply to the branch are listed by the rules API
-	if branch.Protected {
-		return nil
-	}
+	// a branch that requires pull requests is never dead (a hotfix into a just-promoted release or develop branch is
+	// merged through a PR whatever happened to the earlier PRs of the branch). The rules that apply to the branch (rulesets)
+	// are listed by the rules API; classic branch protection shows in the "protected" field of the branch.
 	rulesBody, err := g.api(ctx, fmt.Sprintf("/repos/%s/%s/rules/branches/%s", config.Config.GithubAppOrganization, repo, url.PathEscape(pr.Base.Ref)), "", "GET", nil, nil)
 	if err != nil {
 		return fmt.Errorf("error reading the rules that apply to the branch %s (base of PR #%d): %v (%s)", pr.Base.Ref, pr.Number, err, string(rulesBody))
 	}
-	var rules []json.RawMessage
+	var rules []struct {
+		Type string `json:"type"`
+	}
 	if err := json.Unmarshal(rulesBody, &rules); err != nil {
 		return fmt.Errorf("error parsing the rules of the branch %s (base of PR #%d): %v (%s)", pr.Base.Ref, pr.Number, err, string(rulesBody))
 	}
-	if len(rules) > 0 {
-		return nil // covered by a ruleset: protected
+	for _, r := range rules {
+		if r.Type == "pull_request" {
+			return nil // a ruleset requires pull requests on this branch
+		}
 	}
+	if branch.Protected && len(rules) == 0 {
+		return nil // classic branch protection and no ruleset at all
+	}
+	// (rules that are not about pull requests, e.g. a copilot_code_review-only ruleset that also makes "protected" true,
+	// or no protection at all: the branch is dead)
 	status := "closed without being merged"
 	if wasMerged {
 		status = "already merged (the branch was kept)"
@@ -941,7 +975,7 @@ func (g *ForcemergeImpl) inferStack(ctx context.Context, repo string, pr *pullRe
 	if position == 0 {
 		return false, fmt.Errorf("PR #%d is not in the chain of PRs found from its base branch: the stack is ambiguous", pr.Number)
 	}
-	pr.Stack = &prStack{Position: position, Size: len(chain) + validAbove}
+	pr.Stack = &prStack{Position: position, Size: len(chain)} // (Size is only read by the stack mode, which has no stray PR above)
 	pr.Stack.Base.Ref = defaultBranch
 	pr.stackInferred = true
 	return true, nil
@@ -1027,12 +1061,10 @@ func (p *mergePlan) lockedPRs() []*pullRequestInfo {
  */
 func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber, prURL, explanation, mergeMode string) (*mergePlan, error) {
 	method := "merge"
-	explicit := strings.Contains(explanation, "/squash")
+	explicit, explanation := extractSquashFlag(explanation)
 	if explicit {
 		method = "squash"
 	}
-	// let's remove the /squash string from the explanation
-	explanation = strings.ReplaceAll(explanation, "/squash", "")
 
 	pr, err := g.fetchPullRequest(ctx, repo, prNumber)
 	if err != nil {
@@ -1120,6 +1152,23 @@ func (g *ForcemergeImpl) planMerge(ctx context.Context, username, repo, prNumber
 		return nil, fmt.Errorf("nothing merged: PR #%d would be %s-merged into %s while %s are open above it: that rewrites the commits they carry (the PRs above would then conflict with the rewritten history). %s", pr.Number, plan.method, pr.Base.Ref, prNumbers(plan.children), squashAdvice(pr))
 	}
 	return plan, nil
+}
+
+// squashStrayWarning warns that the PRs left untouched above a PR merged with squash (or rebase) carry its original
+// commits: they will conflict with the rewritten history (nothing is said for a merge commit)
+func squashStrayWarning(method string) string {
+	if method == "merge" || method == "" {
+		return ""
+	}
+	return fmt.Sprintf(" Warning: the PRs left untouched carry the original commits of the merged PR, and this PR is merged with %s: they will conflict with the rewritten history.", method)
+}
+
+// squashStrayNote is the warning as a sentence that follows a list of PRs in the answer
+func squashStrayNote(method string) string {
+	if w := squashStrayWarning(method); w != "" {
+		return "." + w
+	}
+	return ""
 }
 
 // squashAdvice says what to do when a stack can't be merged with squash or rebase. A GitHub stack can't be merged
@@ -1252,6 +1301,8 @@ type approval struct {
 	review int64
 	// maybe: the approval request failed with an unknown outcome and no review of Goliac could be found: it may exist
 	maybe bool
+	// also: other reviews of Goliac found for the same PR with the same body (all of them are dismissed)
+	also []int64
 }
 
 func (g *ForcemergeImpl) approvePR(ctx context.Context, repo string, pr *pullRequestInfo, reviewBody string) (*approval, error) {
@@ -1291,6 +1342,12 @@ func (g *ForcemergeImpl) approvePR(ctx context.Context, repo string, pr *pullReq
 
 // failAfterApprovals dismisses the approvals Goliac created when the merge definitively failed;
 // when the outcome is unknown (the merge may still happen) or a dismissal fails, the approvals are listed in the error
+// cleanupContext is the context of what must run even when the force merge deadline has passed (dismissing the
+// approvals, looking for an approval, closing a merged PR): detached from the cancellation, with its own timeout
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+}
+
 func (g *ForcemergeImpl) failAfterApprovals(ctx context.Context, repo string, approvals []*approval, cause error) error {
 	if len(approvals) == 0 {
 		return cause
@@ -1305,17 +1362,26 @@ func (g *ForcemergeImpl) failAfterApprovals(ctx context.Context, repo string, ap
 			failed = append(failed, a)
 			continue
 		}
-		_, err := g.api(
-			ctx,
-			fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/dismissals", config.Config.GithubAppOrganization, repo, a.pr, a.review),
-			"",
-			"PUT",
-			map[string]interface{}{
-				"message": "Goliac force merge failed: approval dismissed",
-				"event":   "DISMISS",
-			},
-			nil)
-		if err != nil {
+		ok := true
+		for _, id := range append([]int64{a.review}, a.also...) {
+			// the cleanup runs on a detached context: after the deadline of the force merge the approvals must still go
+			cctx, cancel := cleanupContext(ctx)
+			_, err := g.api(
+				cctx,
+				fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/dismissals", config.Config.GithubAppOrganization, repo, a.pr, id),
+				"",
+				"PUT",
+				map[string]interface{}{
+					"message": "Goliac force merge failed: approval dismissed",
+					"event":   "DISMISS",
+				},
+				nil)
+			cancel()
+			if err != nil {
+				ok = false
+			}
+		}
+		if !ok {
 			failed = append(failed, a)
 		}
 	}
@@ -1325,27 +1391,55 @@ func (g *ForcemergeImpl) failAfterApprovals(ctx context.Context, repo string, ap
 	return fmt.Errorf("%w (the approvals Goliac created were dismissed)", cause)
 }
 
-// findApproval looks for the review Goliac may have created on the PR (same body, approving): its id lets it be dismissed.
-// When the reviews can't be listed or none matches, the approval is reported as "may exist".
+// appSlugger is implemented by the real GitHub client (the slug of the GitHub App Goliac runs as)
+type appSlugger interface{ AppSlug() string }
+
+// goliacReviewer is the login of the reviews created by Goliac: the GitHub App slug with "[bot]" ("" when unknown)
+func (g *ForcemergeImpl) goliacReviewer() string {
+	if s, ok := g.ws.(appSlugger); ok && s.AppSlug() != "" {
+		return strings.ToLower(s.AppSlug()) + "[bot]"
+	}
+	return ""
+}
+
+// findApproval looks for the reviews Goliac may have created on the PR when the approval request had an unknown outcome:
+// approving, created by Goliac itself (the login of its GitHub App), on the pinned head, with the same body. Every match
+// is bound to the approval (they are all dismissed if the merge does not happen), so a human review with the same body
+// is never touched. When the reviews can't be listed, the identity of Goliac is unknown or none matches, the approval is
+// reported as "may exist".
 func (g *ForcemergeImpl) findApproval(ctx context.Context, repo string, pr *pullRequestInfo, reviewBody string) *approval {
 	a := &approval{pr: pr.Number, maybe: true}
+	reviewer := g.goliacReviewer()
+	if reviewer == "" {
+		return a
+	}
+	ctx, cancel := cleanupContext(ctx) // (the force merge deadline may be the reason of the unknown outcome)
+	defer cancel()
 	for page := 1; page <= maxListPages; page++ {
 		body, err := g.api(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", config.Config.GithubAppOrganization, repo, pr.Number), fmt.Sprintf("per_page=100&page=%d", page), "GET", nil, nil)
 		if err != nil {
 			return a
 		}
 		var reviews []struct {
-			ID    int64  `json:"id"`
-			State string `json:"state"`
-			Body  string `json:"body"`
+			ID       int64  `json:"id"`
+			State    string `json:"state"`
+			Body     string `json:"body"`
+			CommitID string `json:"commit_id"`
+			User     struct {
+				Login string `json:"login"`
+			} `json:"user"`
 		}
 		if json.Unmarshal(body, &reviews) != nil {
 			return a
 		}
 		for _, r := range reviews {
-			if r.State == "APPROVED" && r.Body == reviewBody && r.ID != 0 {
-				a.review = r.ID
-				a.maybe = false
+			if r.State == "APPROVED" && r.Body == reviewBody && r.ID != 0 && r.CommitID == pr.Head.Sha && strings.EqualFold(r.User.Login, reviewer) {
+				if a.review == 0 {
+					a.review = r.ID
+					a.maybe = false
+				} else {
+					a.also = append(a.also, r.ID)
+				}
 			}
 		}
 		if len(reviews) < 100 {
@@ -1361,7 +1455,11 @@ func describeApprovals(approvals []*approval) string {
 		if a.review == 0 {
 			parts = append(parts, fmt.Sprintf("PR #%d (the approval may exist, its review id is unknown)", a.pr))
 		} else {
-			parts = append(parts, fmt.Sprintf("PR #%d (review %d)", a.pr, a.review))
+			ids := []string{fmt.Sprint(a.review)}
+			for _, id := range a.also {
+				ids = append(ids, fmt.Sprint(id))
+			}
+			parts = append(parts, fmt.Sprintf("PR #%d (review %s)", a.pr, strings.Join(ids, ", ")))
 		}
 	}
 	return strings.Join(parts, ", ")
@@ -1379,7 +1477,7 @@ func (g *ForcemergeImpl) executePlan(ctx context.Context, plan *mergePlan) (stri
 		return "", err
 	}
 	if len(plan.strays) > 0 {
-		return fmt.Sprintf("Force merged: %s; PRs left untouched (not retargeted): %s", summarize([]*pullRequestInfo{plan.pr}), describeStrays(plan.strays)), nil
+		return fmt.Sprintf("Force merged: %s; PRs left untouched (not retargeted): %s%s", summarize([]*pullRequestInfo{plan.pr}), describeStrays(plan.strays), squashStrayNote(plan.method)), nil
 	}
 	return "", nil
 }
@@ -1395,6 +1493,7 @@ func (g *ForcemergeImpl) mergePlain(ctx context.Context, plan *mergePlan) error 
 	}
 	if len(plan.strays) > 0 {
 		reviewBody += fmt.Sprintf(" PRs based on this PR's branch that are left untouched (not retargeted): %s.", describeStrays(plan.strays))
+		reviewBody += squashStrayWarning(plan.method)
 	}
 	commitTitle := forcemergeCommitTitle(pr.Title, pr.Number, plan.username)
 	commitMessage := forcemergeCommitMessage(plan.username, pr.HTMLURL, pr.Title)
@@ -1624,6 +1723,10 @@ func (g *ForcemergeImpl) mergeDirect(ctx context.Context, plan *mergePlan) (stri
 	}
 	if len(plan.strays) > 0 {
 		reviewBody += fmt.Sprintf(" PRs above that are left untouched (not retargeted): %s.", describeStrays(plan.strays))
+		if bottom {
+			// (a mid-stack PR is merged into its parent branch with a merge commit: nothing is rewritten)
+			reviewBody += squashStrayWarning(plan.method)
+		}
 	}
 	reviewBody += " " + pr.stackSource()
 
@@ -1693,6 +1796,9 @@ func (g *ForcemergeImpl) mergeDirect(ctx context.Context, plan *mergePlan) (stri
 	}
 	if len(strays) > 0 {
 		summary += fmt.Sprintf("; left untouched (not retargeted): %s", describeStrays(strays))
+		if bottom {
+			summary += squashStrayNote(plan.method)
+		}
 	}
 	return summary, nil
 }

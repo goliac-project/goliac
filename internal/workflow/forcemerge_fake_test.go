@@ -110,11 +110,16 @@ func (p *fakePR) headLabel() string {
 }
 
 type fakeReview struct {
-	ID    int64
-	PR    int
-	State string
-	Body  string
+	ID       int64
+	PR       int
+	State    string
+	Body     string
+	CommitID string
+	Login    string
 }
+
+// GetAppSlug is the GitHub App Goliac runs as in the fake
+func (f *fakeGitHub) GetAppSlug() string { return "goliac-app" }
 
 // fakeClock is a manual clock: Sleep advances the time, nothing really sleeps
 type fakeClock struct {
@@ -196,6 +201,8 @@ type fakeGitHub struct {
 	// branchProtected: classic branch protection; branchRules: number of ruleset rules that apply to the branch
 	branchProtected map[string]bool
 	branchRules     map[string]int
+	// branchRuleTypes: rules of these types (e.g. "copilot_code_review", "deletion") apply to the branch
+	branchRuleTypes map[string][]string
 
 	// head sha of the PRs at the time of each synchronous merge (what GitHub really merges)
 	syncMergedHeads []string
@@ -515,6 +522,9 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		for i := 0; i < f.branchRules[name]; i++ {
 			rules = append(rules, map[string]interface{}{"type": "pull_request", "ruleset_id": i + 1})
 		}
+		for i, typ := range f.branchRuleTypes[name] {
+			rules = append(rules, map[string]interface{}{"type": typ, "ruleset_id": 100 + i})
+		}
 		return json.Marshal(rules)
 
 	case method == "POST" && reviewEndpoint.MatchString(endpoint):
@@ -532,7 +542,8 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		f.reviewSeq++
 		id := 1000 + f.reviewSeq
 		text, _ := body["body"].(string)
-		f.reviews = append(f.reviews, fakeReview{ID: id, PR: n, State: "APPROVED", Body: text})
+		commit, _ := body["commit_id"].(string)
+		f.reviews = append(f.reviews, fakeReview{ID: id, PR: n, State: "APPROVED", Body: text, CommitID: commit, Login: "goliac-app[bot]"})
 		if f.reviewResponseLost[n] {
 			// the review was created but the answer never came back
 			return nil, errors.New("read tcp: connection reset by peer")
@@ -554,7 +565,7 @@ func (f *fakeGitHub) CallRestAPI(ctx context.Context, endpoint, parameters, meth
 		res := []map[string]interface{}{}
 		for _, r := range f.reviews {
 			if r.PR == n {
-				res = append(res, map[string]interface{}{"id": r.ID, "state": r.State, "body": r.Body})
+				res = append(res, map[string]interface{}{"id": r.ID, "state": r.State, "body": r.Body, "commit_id": r.CommitID, "user": map[string]interface{}{"login": r.Login, "type": "Bot"}})
 			}
 		}
 		return json.Marshal(res)

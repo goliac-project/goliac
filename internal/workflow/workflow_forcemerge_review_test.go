@@ -647,7 +647,7 @@ func TestForcemergeAStrayPRsAboveInDirectMode(t *testing.T) {
 	})
 }
 
-func TestForcemergeBProtectedBranchesAreNeverDead(t *testing.T) {
+func TestForcemergeBOnlyPullRequestBranchesAreNeverDead(t *testing.T) {
 	deadBranch := func() map[int]*fakePR {
 		return map[int]*fakePR{
 			10: {Number: 10, Title: "release", BaseRef: "main", HeadRef: "release/1.0", HeadSha: "tip", State: "closed", Merged: true},
@@ -663,22 +663,56 @@ func TestForcemergeBProtectedBranchesAreNeverDead(t *testing.T) {
 		_, err := mergePR(fc, 11, "hotfix", "")
 		return err, gh
 	}
-
-	t.Run("unprotected: dead, refused", func(t *testing.T) {
-		err, gh := run(func(gh *fakeGitHub) {})
+	refused := func(t *testing.T, err error, gh *fakeGitHub) {
 		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "dead branch")
 		assert.Empty(t, gh.sideEffects())
+	}
+	merged := func(t *testing.T, err error, gh *fakeGitHub) {
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/11/merge")))
+	}
+
+	// live at AlayaCare: feature branches have protected=false and no rules; main has protected=true and pull_request rules
+	t.Run("no protection and no rules: dead, refused", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {})
+		refused(t, err, gh)
 	})
-	t.Run("covered by classic branch protection: merged", func(t *testing.T) {
+	t.Run("a ruleset with a pull_request rule: exempt", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.branchProtected = map[string]bool{"release/1.0": true}
+			gh.branchRules = map[string]int{"release/1.0": 1}
+		})
+		merged(t, err, gh)
+	})
+	t.Run("a pull_request rule among other rules, the branch not 'protected': exempt", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.branchRules = map[string]int{"release/1.0": 1}
+			gh.branchRuleTypes = map[string][]string{"release/1.0": {"deletion", "non_fast_forward"}}
+		})
+		merged(t, err, gh)
+	})
+	t.Run("classic protection and no rules at all: exempt", func(t *testing.T) {
 		err, gh := run(func(gh *fakeGitHub) { gh.branchProtected = map[string]bool{"release/1.0": true} })
-		assert.Nil(t, err)
-		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/11/merge")))
-		assert.Empty(t, gh.find("GET", "/rules/branches/release%2F1.0"), "no need to look at the rulesets")
+		merged(t, err, gh)
 	})
-	t.Run("covered by a ruleset only (the branch is not 'protected'): merged", func(t *testing.T) {
-		err, gh := run(func(gh *fakeGitHub) { gh.branchRules = map[string]int{"release/1.0": 2} })
-		assert.Nil(t, err)
-		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/11/merge")))
+	t.Run("rules that are not about pull requests, protected=true (a copilot_code_review-only ruleset): not exempt", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.branchProtected = map[string]bool{"release/1.0": true}
+			gh.branchRuleTypes = map[string][]string{"release/1.0": {"copilot_code_review"}}
+		})
+		refused(t, err, gh)
+	})
+	t.Run("rules that are not about pull requests, protected=false: not exempt", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) { gh.branchRuleTypes = map[string][]string{"release/1.0": {"deletion"}} })
+		refused(t, err, gh)
+	})
+	t.Run("exactly one pull_request rule is enough", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) { gh.branchRules = map[string]int{"release/1.0": 1} })
+		merged(t, err, gh)
+	})
+	t.Run("the rules are always looked up when the tip is unchanged (protected or not)", func(t *testing.T) {
+		_, gh := run(func(gh *fakeGitHub) { gh.branchProtected = map[string]bool{"release/1.0": true} })
 		assert.Equal(t, 1, len(gh.find("GET", "/rules/branches/release%2F1.0")))
 	})
 	t.Run("a failing rules lookup refuses", func(t *testing.T) {
@@ -705,6 +739,19 @@ func TestForcemergeBProtectedBranchesAreNeverDead(t *testing.T) {
 		})
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "error parsing the rules")
+		assert.Empty(t, gh.sideEffects())
+	})
+	t.Run("a branch answer without a commit sha refuses", func(t *testing.T) {
+		err, gh := run(func(gh *fakeGitHub) {
+			gh.onCall = func(f *fakeGitHub, call restCall) ([]byte, error) {
+				if strings.HasPrefix(call.Endpoint, "/repos/myorg/goliac/branches/") {
+					return []byte(`{"protected":true}`), nil
+				}
+				return nil, nil
+			}
+		})
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "error parsing the branch release/1.0")
 		assert.Empty(t, gh.sideEffects())
 	})
 	t.Run("a branch that moved on is alive without any lookup of the rules", func(t *testing.T) {

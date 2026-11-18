@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/caarlos0/env"
 	"github.com/sirupsen/logrus"
@@ -13,7 +15,7 @@ func init() {
 	env.Parse(&Config)
 
 	setupLogrus()
-	if err := ValidateForcemerge(Config.WorkflowForcemergeWaitSeconds, Config.WorkflowForcemergeTimeoutSeconds); err != nil {
+	if err := ValidateForcemerge(); err != nil {
 		logrus.Fatalf("invalid configuration: %v", err)
 	}
 	if Config.OpenTelemetryEnabled {
@@ -41,14 +43,34 @@ func setupLogrus() {
 	}
 }
 
-// ValidateForcemerge rejects the non positive force merge durations (a wait of 0 would never wait for GitHub, and a timeout
-// of 0 would cancel every force merge at once)
-func ValidateForcemerge(waitSeconds, timeoutSeconds int) error {
-	if waitSeconds <= 0 {
-		return fmt.Errorf("GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS must be a positive number of seconds (got %d)", waitSeconds)
+// ValidateForcemerge rejects the force merge durations that are not a positive number of seconds. A value that is set but
+// is not a whole number (or is empty) is reported with its raw text: the parsed value would be 0 and the error
+// misleading. A wait of 0 would never wait for GitHub, a timeout of 0 would cancel every force merge at once.
+func ValidateForcemerge() error {
+	for _, v := range []struct {
+		name   string
+		parsed int
+	}{
+		{"GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS", Config.WorkflowForcemergeWaitSeconds},
+		{"GOLIAC_WORKFLOW_FORCEMERGE_TIMEOUT_SECONDS", Config.WorkflowForcemergeTimeoutSeconds},
+	} {
+		if err := checkSeconds(v.name, v.parsed); err != nil {
+			return err
+		}
 	}
-	if timeoutSeconds <= 0 {
-		return fmt.Errorf("GOLIAC_WORKFLOW_FORCEMERGE_TIMEOUT_SECONDS must be a positive number of seconds (got %d)", timeoutSeconds)
+	return nil
+}
+
+func checkSeconds(name string, parsed int) error {
+	if raw, set := os.LookupEnv(name); set {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("%s=%q is not a whole number of seconds", name, raw)
+		}
+		parsed = n
+	}
+	if parsed <= 0 {
+		return fmt.Errorf("%s must be a positive number of seconds (got %d)", name, parsed)
 	}
 	return nil
 }
