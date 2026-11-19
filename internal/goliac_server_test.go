@@ -633,6 +633,13 @@ func TestHandleIssueComment(t *testing.T) {
 			{"/forcemerge:fmtest:stacked", "", "stacked"},
 			{"/forcemerge:fmtest:direct: fix: prod is down", "direct", "fix: prod is down"},
 			{"/forcemerge:fmtest: we need the stack: now", "", "we need the stack: now"},
+			// a multi-line explanation is kept whole
+			{"/forcemerge:fmtest: first line\nsecond line\n  third line  \n", "", "first line\nsecond line\n  third line"},
+			{"/forcemerge:fmtest:stack: why\nbecause prod is down", "stack", "why\nbecause prod is down"},
+			{"/forcemerge:fmtest:stack:\nwhy on the next line", "stack", "why on the next line"},
+			{"/forcemerge:fmtest: crlf\r\nsecond", "", "crlf\r\nsecond"},
+			// "/squash" is passed as is to the workflow (the workflow decides on the word)
+			{"/forcemerge:fmtest: the /squashed branch", "", "the /squashed branch"},
 		}
 		for _, c := range cases {
 			localfixture, remotefixture := fixtureGoliacLocal()

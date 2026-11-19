@@ -74,6 +74,14 @@ func NewWorkflowService(organization string, local WorkflowLocalResource, remote
 	}
 }
 
+// AppSlug is the slug of the GitHub App Goliac runs as ("" when the client does not know it)
+func (ws *WorkflowServiceImpl) AppSlug() string {
+	if s, ok := ws.ghclient.(interface{ GetAppSlug() string }); ok {
+		return s.GetAppSlug()
+	}
+	return ""
+}
+
 func (ws *WorkflowServiceImpl) CallRestAPI(ctx context.Context, endpoint, parameters, method string, body map[string]interface{}, githubToken *string) ([]byte, error) {
 	return ws.ghclient.CallRestAPI(ctx, endpoint, parameters, method, body, githubToken)
 }

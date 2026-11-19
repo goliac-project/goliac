@@ -17,14 +17,24 @@ type recordingPlugin struct {
 	mu   sync.Mutex
 	urls []string
 	err  error
+	// empty: the step has nothing to report (an audit step, for instance)
+	empty bool
+	// failOn: the call number (1 based) that fails (0 = never)
+	failOn int
 }
 
 func (p *recordingPlugin) Execute(ctx context.Context, username, workflowDescription, explanation string, u *url.URL, properties map[string]interface{}) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.urls = append(p.urls, u.String())
+	if p.failOn > 0 && len(p.urls) == p.failOn {
+		return "", fmt.Errorf("slack is down")
+	}
 	if p.err != nil {
 		return "", p.err
+	}
+	if p.empty {
+		return "", nil
 	}
 	return "step:" + u.Path, nil
 }
@@ -107,6 +117,17 @@ func TestForcemergeExecuteWorkflow(t *testing.T) {
 		assert.Equal(t, []string{prURL(32)}, plugin.urls)
 	})
 
+	t.Run("a step with nothing to report adds no (empty) line to the answer", func(t *testing.T) {
+		gh := newFake(t, fixturePlainPR())
+		gh.syncMerge = okJSON(`{"merged":true}`)
+		plugin := &recordingPlugin{empty: true}
+		fc := executeFixture(t, gh, plugin)
+		res, err := exec(fc, 32, "", false)
+		assert.Nil(t, err)
+		assert.Empty(t, res)
+		assert.Equal(t, []string{prURL(32)}, plugin.urls)
+	})
+
 	t.Run("a refused PR runs no step and changes nothing", func(t *testing.T) {
 		prs := fixturePlainPR()
 		prs[32].Draft = true
@@ -143,7 +164,7 @@ func TestForcemergeExecuteWorkflow(t *testing.T) {
 	})
 
 	t.Run("direct merge: summary returned", func(t *testing.T) {
-		gh := newFake(t, fixtureStack())
+		gh := newFake(t, fixtureStackPlain()).allMethods()
 		gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
 		gh.markMergedOnBranchMerge = true
 		plugin := &recordingPlugin{}
@@ -219,9 +240,10 @@ func TestForcemergeInFlightGuard(t *testing.T) {
 		assert.Nil(t, <-done)
 		assert.Equal(t, 1, len(gh.find("PUT", "/pulls/32/merge")), "merged once")
 
-		// the lock is released
+		// the lock is released (the PR is merged now, so a new request is refused for that reason, not for the lock)
 		_, err = exec(fc, 32, "", false)
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "already merged")
 	})
 
 	t.Run("a stack merge also guards the other PRs of the stack", func(t *testing.T) {
@@ -243,12 +265,12 @@ func TestForcemergeInFlightGuard(t *testing.T) {
 		assert.Contains(t, err.Error(), "already running")
 		close(release)
 		assert.Nil(t, <-done)
-		assert.Equal(t, 1, len(gh.find("PUT", "/merge-async")))
+		assert.Equal(t, 4, len(gh.find("PUT", "/merge-async")), "bottom-up, one merge per PR")
 	})
 
 	t.Run("a direct merge also guards the parent and the PRs above (adjacent PRs)", func(t *testing.T) {
 		for _, adjacent := range []int{2, 4} { // 2 is retargeted by a direct merge of 3, 4 is its parent
-			gh := newFake(t, fixtureStack())
+			gh := newFake(t, fixtureStackPlain()).allMethods()
 			gh.branchMerge = okJSON(`{"sha":"mergecommit"}`)
 			gh.markMergedOnBranchMerge = true
 			fc := executeFixture(t, gh, &recordingPlugin{})

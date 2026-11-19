@@ -51,6 +51,9 @@ func (m *GithubClientMock) CallRestAPI(ctx context.Context, endpoint, parameters
 		!strings.Contains(endpoint, "/merge") && !strings.Contains(endpoint, "/reviews") {
 		return []byte(`{"title":"Test PR title"}`), nil
 	}
+	if method == "PUT" && strings.HasSuffix(endpoint, "/merge") {
+		return []byte(`{"merged":true}`), nil
+	}
 	return nil, nil
 }
 

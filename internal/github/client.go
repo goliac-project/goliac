@@ -167,7 +167,7 @@ func getHeaderCaseInsensitive(headers http.Header, key string) string {
 
 // waitRateLimit helps dealing with rate limits
 // cf https://docs.github.com/en/rest/guides/best-practices-for-integrators?apiVersion=2022-11-28#dealing-with-rate-limits
-func waitRateLimit(resetTimeStr string) error {
+func waitRateLimit(ctx context.Context, resetTimeStr string) error {
 	if resetTimeStr == "" {
 		return fmt.Errorf("X-RateLimit-Reset header not found")
 	}
@@ -185,8 +185,14 @@ func waitRateLimit(resetTimeStr string) error {
 	// Calculate how long we need to wait.
 	waitDuration := time.Until(resetTime)
 
-	// Wait until the reset time.
-	time.Sleep(waitDuration)
+	// Wait until the reset time (or until the context is done).
+	timer := time.NewTimer(waitDuration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
 
 	return nil
 }
@@ -288,7 +294,7 @@ func (client *GitHubClientImpl) QueryGraphQLAPI(ctx context.Context, query strin
 
 		if getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset") != "" {
 			// We're being rate limited. Get the reset time from the headers.
-			if err := waitRateLimit(getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset")); err != nil {
+			if err := waitRateLimit(ctx, getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset")); err != nil {
 				if childSpan != nil {
 					childSpan.SetStatus(codes.Error, fmt.Sprintf("waitRateLimit: %s", err.Error()))
 				}
@@ -437,10 +443,25 @@ func (client *GitHubClientImpl) CallRestAPI(ctx context.Context, endpoint, param
 			goliacStats.GithubThrottled++
 		}
 
+		if getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset") == "" {
+			// no reset time (e.g. a 429 with only Retry-After): the caller sees the status, not a header error
+			responseBody, _ := io.ReadAll(resp.Body)
+			if childSpan != nil {
+				childSpan.SetStatus(codes.Error, fmt.Sprintf("unexpected status: %s", resp.Status))
+			}
+			return responseBody, fmt.Errorf("unexpected status: %s", resp.Status)
+		}
+
 		// We're being rate limited. Get the reset time from the headers.
-		if err := waitRateLimit(getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset")); err != nil {
+		if err := waitRateLimit(ctx, getHeaderCaseInsensitive(resp.Header, "X-RateLimit-Reset")); err != nil {
 			if childSpan != nil {
 				childSpan.SetStatus(codes.Error, fmt.Sprintf("waitRateLimit: %s", err.Error()))
+			}
+			if ctx.Err() != nil {
+				// the wait for the reset was cut short (deadline or cancellation): the request was rejected, not lost,
+				// the caller sees the status of the rate limit
+				responseBody, _ := io.ReadAll(resp.Body)
+				return responseBody, fmt.Errorf("unexpected status: %s (rate limited: waiting for the reset was cancelled: %v)", resp.Status, err)
 			}
 			return nil, err
 		}

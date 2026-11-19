@@ -983,7 +983,8 @@ func (g *GoliacServerImpl) handleIssueComment(ctx context.Context, organization,
 		command := matches[1]
 
 		// looking for something like "/forcemerge:default: an explanation"
-		commentRegex := regexp.MustCompile(`^/([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+):(.*)`)
+		// (?s): the explanation may span several lines
+		commentRegex := regexp.MustCompile(`(?s)^/([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+):(.*)`)
 		comment = strings.Trim(comment, " \r\n\t")
 		matches := commentRegex.FindStringSubmatch(comment)
 		if len(matches) == 4 {

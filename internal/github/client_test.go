@@ -5,8 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type MockRoundTripper struct {
@@ -181,4 +185,52 @@ func TestGetHeaderCaseInsensitive(t *testing.T) {
 	if header != "0" {
 		t.Errorf("expected '0', got %s", header)
 	}
+}
+
+func TestWaitRateLimitRespectsTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// a reset time far in the future: without the context the call would sleep for an hour
+	reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	start := time.Now()
+	err := waitRateLimit(ctx, reset)
+	assert.NotNil(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
+
+	assert.NotNil(t, waitRateLimit(context.Background(), ""))
+	assert.NotNil(t, waitRateLimit(context.Background(), "not a number"))
+	assert.Nil(t, waitRateLimit(context.Background(), strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)))
+}
+
+func TestCallRestAPIRateLimitWithoutResetHeader(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"message":"secondary rate limit"}`))
+	}))
+	defer testServer.Close()
+	client := &GitHubClientImpl{gitHubServer: testServer.URL, httpClient: &http.Client{}}
+	body, err := client.CallRestAPI(context.Background(), "/x", "", "PUT", map[string]interface{}{"a": "b"}, nil)
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "unexpected status: 429")
+	assert.Contains(t, string(body), "secondary rate limit")
+}
+
+func TestCallRestAPIRateLimitWaitCutShort(t *testing.T) {
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"message":"rate limit"}`))
+	}))
+	defer testServer.Close()
+	client := &GitHubClientImpl{gitHubServer: testServer.URL, httpClient: &http.Client{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	body, err := client.CallRestAPI(ctx, "/x", "", "PUT", map[string]interface{}{"a": "b"}, nil)
+	assert.NotNil(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	// the caller sees the 429 (the request was rejected), not a bare context error
+	assert.Contains(t, err.Error(), "unexpected status: 429")
+	assert.Contains(t, string(body), "rate limit")
 }

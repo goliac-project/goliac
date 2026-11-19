@@ -81,6 +81,11 @@ var Config = struct {
 	WorkflowJiraApiToken        string `env:"GOLIAC_WORKFLOW_JIRA_API_TOKEN" envDefault:""`
 	WorkflowJiraIssueType       string `env:"GOLIAC_WORKFLOW_JIRA_ISSUE_TYPE" envDefault:"Task"`
 	WorkflowDynamoDBTableName   string `env:"GOLIAC_WORKFLOW_DYNAMODB_TABLE_NAME" envDefault:"goliac-workflows"`
+	// how long (seconds) a force merge waits for GitHub to do its part after a merge (retarget the PR above a merged PR of a
+	// GitHub stack, mark a PR merged)
+	WorkflowForcemergeWaitSeconds int `env:"GOLIAC_WORKFLOW_FORCEMERGE_WAIT_SECONDS" envDefault:"60"`
+	// the whole force merge (every GitHub call and wait) is cancelled after this many seconds
+	WorkflowForcemergeTimeoutSeconds int `env:"GOLIAC_WORKFLOW_FORCEMERGE_TIMEOUT_SECONDS" envDefault:"600"`
 }{}
 
 // to be overrided at build time with
