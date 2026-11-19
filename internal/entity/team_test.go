@@ -436,3 +436,175 @@ spec:
 		assert.Equal(t, "owner2", checkTeam.Spec.Owners[0])
 	})
 }
+
+func TestTeamSlack(t *testing.T) {
+	users := func() map[string]*User {
+		users := make(map[string]*User)
+		for _, username := range []string{"owner1", "owner2"} {
+			u := User{}
+			u.Name = username
+			u.Spec.GithubID = username
+			users[username] = &u
+		}
+		return users
+	}
+
+	t.Run("happy path: slack channels are read", func(t *testing.T) {
+		fs := memfs.New()
+		fixtureCreateUser(t, fs)
+		fs.MkdirAll("teams/team1", 0755)
+
+		err := utils.WriteFile(fs, "teams/team1/team.yaml", []byte(`
+apiVersion: v1
+kind: Team
+name: team1
+spec:
+  owners:
+  - user1
+  - user2
+  slack:
+    teamChannel: C03QGB1UQKD
+    reviewsChannel: G010N0MDM8X
+`), 0644)
+		assert.Nil(t, err)
+		logsCollector := observability.NewLogCollection()
+		users := ReadUserDirectory(fs, "users", logsCollector)
+		teams := ReadTeamDirectory(fs, "teams", users, logsCollector)
+		assert.Equal(t, false, logsCollector.HasErrors())
+		assert.Equal(t, false, logsCollector.HasWarns())
+
+		team1 := teams["team1"]
+		assert.NotNil(t, team1)
+		assert.NotNil(t, team1.Spec.Slack)
+		assert.Equal(t, "C03QGB1UQKD", team1.Spec.Slack.TeamChannel)
+		assert.Equal(t, "G010N0MDM8X", team1.Spec.Slack.ReviewsChannel)
+	})
+
+	t.Run("happy path: only teamChannel on an externally managed team", func(t *testing.T) {
+		fs := memfs.New()
+		fixtureCreateUser(t, fs)
+		fs.MkdirAll("teams/team1", 0755)
+
+		err := utils.WriteFile(fs, "teams/team1/team.yaml", []byte(`
+apiVersion: v1
+kind: Team
+name: team1
+spec:
+  externallyManaged: true
+  slack:
+    teamChannel: CBED0EQEN
+`), 0644)
+		assert.Nil(t, err)
+		logsCollector := observability.NewLogCollection()
+		users := ReadUserDirectory(fs, "users", logsCollector)
+		teams := ReadTeamDirectory(fs, "teams", users, logsCollector)
+		assert.Equal(t, false, logsCollector.HasErrors())
+
+		team1 := teams["team1"]
+		assert.NotNil(t, team1)
+		assert.Equal(t, "CBED0EQEN", team1.Spec.Slack.TeamChannel)
+		assert.Equal(t, "", team1.Spec.Slack.ReviewsChannel)
+	})
+
+	for _, tc := range []struct {
+		name  string
+		field string
+		value string
+	}{
+		{"channel name instead of ID", "teamChannel", "team-raccoons"},
+		{"channel name with hash", "reviewsChannel", "'#team-raccoons'"},
+		{"lowercase ID", "teamChannel", "c03qgb1uqkd"},
+		{"user ID", "reviewsChannel", "U02GU8NSX"},
+		{"too short", "teamChannel", "C123"},
+	} {
+		t.Run("not happy path: "+tc.name, func(t *testing.T) {
+			fs := memfs.New()
+			fixtureCreateUser(t, fs)
+			fs.MkdirAll("teams/team1", 0755)
+
+			err := utils.WriteFile(fs, "teams/team1/team.yaml", []byte(fmt.Sprintf(`
+apiVersion: v1
+kind: Team
+name: team1
+spec:
+  owners:
+  - user1
+  - user2
+  slack:
+    %s: %s
+`, tc.field, tc.value)), 0644)
+			assert.Nil(t, err)
+			logsCollector := observability.NewLogCollection()
+			users := ReadUserDirectory(fs, "users", logsCollector)
+			teams := ReadTeamDirectory(fs, "teams", users, logsCollector)
+			assert.Equal(t, true, logsCollector.HasErrors())
+			assert.Contains(t, logsCollector.Errors[0].Error(), "spec.slack."+tc.field)
+			assert.Contains(t, logsCollector.Errors[0].Error(), "teams/team1/team.yaml")
+			assert.Nil(t, teams["team1"])
+		})
+	}
+
+	t.Run("happy path: slack channels survive the removal of a user", func(t *testing.T) {
+		fs := memfs.New()
+		err := utils.WriteFile(fs, "/teams/ateam/team.yaml", []byte(`
+apiVersion: v1
+kind: Team
+name: ateam
+spec:
+  owners:
+    - owner1
+    - owner2
+  members:
+    - leaver
+  slack:
+    teamChannel: C03QGB1UQKD
+    reviewsChannel: C0BS8SY9ZS7
+`), 0644)
+		assert.Nil(t, err)
+
+		changed, err := ReadAndAdjustTeamDirectory(fs, "/teams", users())
+		assert.Nil(t, err)
+		assert.Equal(t, []string{"/teams/ateam/team.yaml"}, changed)
+
+		f, err := utils.ReadFile(fs, "/teams/ateam/team.yaml")
+		assert.Nil(t, err)
+
+		var checkTeam Team
+		assert.Nil(t, yaml.Unmarshal(f, &checkTeam))
+		assert.Equal(t, 0, len(checkTeam.Spec.Members))
+		assert.NotNil(t, checkTeam.Spec.Slack)
+		assert.Equal(t, "C03QGB1UQKD", checkTeam.Spec.Slack.TeamChannel)
+		assert.Equal(t, "C0BS8SY9ZS7", checkTeam.Spec.Slack.ReviewsChannel)
+	})
+
+	t.Run("happy path: a team without slack channels is written without a slack key", func(t *testing.T) {
+		fs := memfs.New()
+		err := utils.WriteFile(fs, "/teams/ateam/team.yaml", []byte(`
+apiVersion: v1
+kind: Team
+name: ateam
+spec:
+  owners:
+    - owner1
+    - owner2
+  members:
+    - leaver
+`), 0644)
+		assert.Nil(t, err)
+
+		changed, err := ReadAndAdjustTeamDirectory(fs, "/teams", users())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(changed))
+
+		f, err := utils.ReadFile(fs, "/teams/ateam/team.yaml")
+		assert.Nil(t, err)
+		assert.Equal(t, `apiVersion: v1
+kind: Team
+name: ateam
+spec:
+  owners:
+    - owner1
+    - owner2
+`, string(f))
+	})
+}

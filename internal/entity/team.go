@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-git/go-billy/v5"
@@ -12,15 +13,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TeamSlack holds the Slack channels a team wants to be reached on.
+// Goliac does not use these values itself: other tools (like the GitHub App
+// that posts review requests) read them from the teams repository.
+// Every field that a team.yaml may contain must be declared on Team, because
+// Team.Update rewrites the file from this struct and drops unknown keys.
+type TeamSlack struct {
+	// TeamChannel is the team's main channel ID.
+	TeamChannel string `yaml:"teamChannel,omitempty"`
+	// ReviewsChannel is the channel ID for review requests. Consumers fall
+	// back to TeamChannel when it is empty.
+	ReviewsChannel string `yaml:"reviewsChannel,omitempty"`
+}
+
 type Team struct {
 	Entity `yaml:",inline"`
 	Spec   struct {
-		ExternallyManaged bool     `yaml:"externallyManaged,omitempty"`
-		Owners            []string `yaml:"owners,omitempty"`
-		Members           []string `yaml:"members,omitempty"`
+		ExternallyManaged bool       `yaml:"externallyManaged,omitempty"`
+		Owners            []string   `yaml:"owners,omitempty"`
+		Members           []string   `yaml:"members,omitempty"`
+		Slack             *TeamSlack `yaml:"slack,omitempty"`
 	} `yaml:"spec"`
 	ParentTeam *string `yaml:"-"`
 }
+
+// slackChannelID matches public (C...) and older private (G...) Slack channel IDs.
+var slackChannelID = regexp.MustCompile(`^[CG][A-Z0-9]{8,14}$`)
 
 /*
  * NewTeam reads a file and returns a Team object
@@ -177,6 +195,22 @@ func (t *Team) Validate(dirname string, users map[string]*User, logsCollector *o
 		if _, ok := users[member]; !ok {
 			logsCollector.AddError(fmt.Errorf("invalid member: %s doesn't exist in team filename %s/team.yaml", member, dirname))
 			return false
+		}
+	}
+
+	if t.Spec.Slack != nil {
+		channels := []struct {
+			field string
+			value string
+		}{
+			{"teamChannel", t.Spec.Slack.TeamChannel},
+			{"reviewsChannel", t.Spec.Slack.ReviewsChannel},
+		}
+		for _, c := range channels {
+			if c.value != "" && !slackChannelID.MatchString(c.value) {
+				logsCollector.AddError(fmt.Errorf("invalid spec.slack.%s: %q is not a Slack channel ID (like C0123ABCD) for team filename %s/team.yaml", c.field, c.value, dirname))
+				return false
+			}
 		}
 	}
 

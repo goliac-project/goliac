@@ -42,3 +42,26 @@ spec:
 
 It means that Goliac will not try to enforce the team definition, but will take it as it is in Github. It will only use the team to manage the repositories.
 
+## Slack channels
+
+A team can record the Slack channels where it wants to be reached. Goliac doesn't use these values itself; other tools read them from the teams repository (for example, the GitHub App that posts review requests to the team's channel).
+
+```yaml
+apiVersion: v1
+kind: Team
+name: foobar
+spec:
+  owners:
+    - user1
+    - user2
+  slack:
+    teamChannel: C0123ABCD
+    reviewsChannel: C0456EFGH
+```
+
+- `teamChannel`: the team's main channel.
+- `reviewsChannel`: the channel for review requests. Tools fall back to `teamChannel` when it isn't set.
+
+Both are optional and work on externally managed teams too. The values are Slack channel IDs (in Slack: open the channel, click its name, the ID is at the bottom of the About tab), not channel names, so they keep working when a channel is renamed. Goliac rejects a value that isn't shaped like a channel ID.
+
+Comments in a `team.yaml` are not kept: Goliac rewrites the file when it removes a user who left the organization.

@@ -862,6 +862,22 @@ spec:
 It will mean that the team is managed outside of Goliac, and that Goliac will not touch it.
 You can still "attach" repositories to this team, but you will have to manage the team members by yourself.
 
+### Slack channels of a team
+
+A team can record its Slack channel IDs, for tools that need to reach the team (Goliac itself doesn't use them):
+
+` + "```" + `
+apiVersion: v1
+kind: Team
+name: foobar
+spec:
+  slack:
+    teamChannel: C0123ABCD
+    reviewsChannel: C0456EFGH
+` + "```" + `
+
+` + "`" + `reviewsChannel` + "`" + ` is optional; tools fall back to ` + "`" + `teamChannel` + "`" + ` when it isn't set.
+
 `
 	if err := writeFile(filepath.Join(rootpath, "README.md"), []byte(readme), fs); err != nil {
 		logCollector.AddError(fmt.Errorf("not able to write README.md file %s/README.md: %v", rootpath, err))

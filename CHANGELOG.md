@@ -1,3 +1,7 @@
+## Goliac v1.9.16
+
+- feature: optional `spec.slack.teamChannel` and `spec.slack.reviewsChannel` on teams, for tools that need to reach a team in Slack (Goliac itself doesn't use them). The values must be Slack channel IDs. They are kept when Goliac rewrites a `team.yaml` after removing a user who left; before, any key that Goliac didn't know was dropped by that rewrite.
+
 ## Goliac v1.9.14
 
 - feature: force merge supports GitHub stacked PRs, which GitHub refuses on the synchronous merge endpoint (`403 Merging stacked PRs via this endpoint is not supported`). New optional merge mode: `/forcemerge:<workflow>:<direct|stack>:<explanation>`. With the stack `1 > 2 > 3 > 4 > main`:
