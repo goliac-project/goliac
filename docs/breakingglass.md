@@ -46,7 +46,12 @@ Example:
 
 This will trigger the `standard` workflow to merge the PR with the `squash` merge type.
 
-`/squash` is a word of its own (`fix prod /squash`, `fix prod /squash.`); `/squashed` or `/squash-all` are explanation text. The explanation may span several lines: it is kept whole (trimmed at both ends). The explanation is required, and `/squash` alone is not an explanation: `/forcemerge:standard: /squash` is refused (Goliac answers "No explanation provided", or "an explanation is required" when only the flag remains once it is removed). A redelivered GitHub comment (same comment id) is ignored: Goliac remembers the ids it handled in memory for 24 hours, so a restart forgets them and a second Goliac replica does not share them.
+Rules:
+
+- `/squash` must be a separate word: `fix prod /squash` squashes, `fix prod /squashed` does not.
+- The explanation is required: `/forcemerge:standard: /squash` is refused, because `/squash` alone is not an explanation.
+- A multi-line explanation is kept as written.
+- Goliac ignores a comment it has already handled (it keeps the comment ids in memory for 24 hours).
 
 ## Stacked PRs
 
@@ -58,7 +63,14 @@ GitHub only merges [stacked pull requests](https://docs.github.com/en/rest/pulls
 /forcemerge:<workflow_name>:stack: <explanation>
 ```
 
-The merge mode is the token right after the workflow name colon (case-insensitive): `/forcemerge:standard:stack: why`, or a bare `/forcemerge:standard:stack` (which is then refused with "No explanation provided": the explanation is always required). After a space it is explanation text, so `/forcemerge:standard: stack: why` and `/forcemerge:standard: fix: prod is down` have no mode. A word immediately followed by a colon that is not `stack` or `direct` (`/forcemerge:standard:fix: x`) is refused as an unknown merge mode. The approval review always states the resolved mode (`Merge mode: none (this PR is not part of a stack).` for a PR that is not stacked), and for a stacked PR where the stack comes from (`Stack source: GitHub stack metadata.` or `Stack source: inferred from the chain of open PRs (GitHub sent no stack metadata).`). A redelivered GitHub comment (same comment id) is ignored, and a second force merge of a PR that is already being force merged is refused.
+Rules:
+
+- The mode goes right after the workflow name, with no space: `/forcemerge:standard:stack: <explanation>`.
+- Only `stack` and `direct` are modes (case-insensitive). Any other word in that place (`/forcemerge:standard:fix: x`) is refused.
+- After a space it is explanation text: `/forcemerge:standard: stack: why` has no mode.
+- The explanation is required, with or without a mode.
+- The approval review states the mode used and, for a stack, whether GitHub reported it or Goliac inferred it.
+- A force merge on a PR that is already being force merged is refused.
 
 Take the stack `1 > 2 > 3 > 4 > main`: PR 1 is the top (based on PR 2's branch) and PR 4 is the bottom (based on `main`).
 
