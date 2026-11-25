@@ -15,6 +15,7 @@ var Config = struct {
 	GithubAppPrivateKeyFile   string `env:"GOLIAC_GITHUB_APP_PRIVATE_KEY_FILE" envDefault:""`
 	GithubAppClientSecret     string `env:"GOLIAC_GITHUB_APP_CLIENT_SECRET"`
 	GithubAppCallbackURL      string `env:"GOLIAC_GITHUB_APP_CALLBACK_URL"`
+	SessionKey                string `env:"GOLIAC_SESSION_KEY"`
 	GithubPersonalAccessToken string `env:"GOLIAC_GITHUB_PERSONAL_ACCESS_TOKEN"`
 	GoliacEmail               string `env:"GOLIAC_EMAIL" envDefault:"goliac@goliac-project.com"`
 	GoliacTeamOwnerSuffix     string `env:"GOLIAC_TEAM_OWNER_SUFFIX" envDefault:"-goliac-owners"`
