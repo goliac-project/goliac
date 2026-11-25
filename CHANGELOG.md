@@ -1,3 +1,7 @@
+## Goliac v1.9.15
+
+- docs: remove hardcoded `GOLIAC_GITHUB_APP_CLIENT_SECRET` value from `docs/installation.md`, use a placeholder instead (#221)
+
 ## Goliac v1.9.14
 
 - security: bump Go module `google.golang.org/grpc` to v1.83.2 (xDS server DoS via missing `:authority`/`Host` headers), with related `golang.org/x/term` and `golang.org/x/text` updates
