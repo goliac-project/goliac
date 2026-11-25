@@ -30,6 +30,7 @@ import (
 	"github.com/goliac-project/goliac/swagger_gen/restapi/operations/auth"
 	"github.com/goliac-project/goliac/swagger_gen/restapi/operations/external"
 	"github.com/goliac-project/goliac/swagger_gen/restapi/operations/health"
+	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 	"github.com/gosimple/slug"
 	"github.com/sirupsen/logrus"
@@ -136,6 +137,19 @@ func GetSelfGithubAppClientID(client github.GitHubClient, clientSecret string) (
 	return &appInfo, nil
 }
 
+// newSessionStore creates the cookie store used for the web UI sessions.
+// If no key is provided, a random one is generated (sessions will not survive a restart).
+func newSessionStore(sessionKey string) *sessions.CookieStore {
+	var key []byte
+	if sessionKey != "" {
+		key = []byte(sessionKey)
+	} else {
+		logrus.Warn("GOLIAC_SESSION_KEY is not set: using a random session key (user sessions will be lost on restart and not shared across instances)")
+		key = securecookie.GenerateRandomKey(32)
+	}
+	return sessions.NewCookieStore(key)
+}
+
 func NewGoliacServer(goliac Goliac, notificationService notification.NotificationService) GoliacServer {
 	endpoints := oauth2.Endpoint{
 		AuthURL:  "https://github.com/login/oauth/authorize",
@@ -166,7 +180,7 @@ func NewGoliacServer(goliac Goliac, notificationService notification.Notificatio
 		ready:               false,
 		notificationService: notificationService,
 		oauthConfig:         oauthConfig,
-		sessionStore:        sessions.NewCookieStore([]byte("your-secret-key")),
+		sessionStore:        newSessionStore(config.Config.SessionKey),
 		client:              goliac.GetRemoteClient(),
 	}
 	server.applyLobbyCond = sync.NewCond(&server.applyLobbyMutex)

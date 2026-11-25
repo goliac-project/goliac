@@ -1,3 +1,7 @@
+## Goliac v1.9.16
+
+- security: replace the hardcoded web UI session cookie key with the `GOLIAC_SESSION_KEY` environment variable; when unset, a random key is generated at startup (sessions are lost on restart and not shared across instances) (#222)
+
 ## Goliac v1.9.15
 
 - docs: remove hardcoded `GOLIAC_GITHUB_APP_CLIENT_SECRET` value from `docs/installation.md`, use a placeholder instead (#221)

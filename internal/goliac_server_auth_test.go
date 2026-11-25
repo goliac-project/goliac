@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/goliac-project/goliac/swagger_gen/restapi/operations/auth"
@@ -264,5 +265,47 @@ func TestAuthWorkflowsForcemerge(t *testing.T) {
 		assert.Equal(t, 1, len(fmWorkflows))
 		fmWorkflow := fmWorkflows[0]
 		assert.Equal(t, "fmtest", fmWorkflow.WorkflowName)
+	})
+}
+
+func TestNewSessionStore(t *testing.T) {
+	roundTrip := func(t *testing.T, store *sessions.CookieStore) string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		session, _ := store.Get(req, "auth-session")
+		session.Values["user"] = "alice"
+		assert.NoError(t, session.Save(req, rec))
+		cookies := rec.Result().Cookies()
+		assert.Len(t, cookies, 1)
+		return cookies[0].String()
+	}
+	readBack := func(store *sessions.CookieStore, cookie string) (interface{}, bool) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Cookie", cookie)
+		session, err := store.Get(req, "auth-session")
+		return session.Values["user"], err == nil
+	}
+
+	t.Run("happy path: same key reads the cookie", func(t *testing.T) {
+		cookie := roundTrip(t, newSessionStore("my-test-key"))
+		user, ok := readBack(newSessionStore("my-test-key"), cookie)
+		assert.True(t, ok)
+		assert.Equal(t, "alice", user)
+	})
+
+	t.Run("a different key cannot read the cookie", func(t *testing.T) {
+		cookie := roundTrip(t, newSessionStore("my-test-key"))
+		user, ok := readBack(newSessionStore("another-key"), cookie)
+		assert.False(t, ok)
+		assert.Nil(t, user)
+	})
+
+	t.Run("no key: random key is generated, not the old hardcoded one", func(t *testing.T) {
+		cookie := roundTrip(t, newSessionStore(""))
+		_, ok := readBack(newSessionStore("your-secret-key"), cookie)
+		assert.False(t, ok)
+		// two stores without key do not share the same key
+		_, ok = readBack(newSessionStore(""), cookie)
+		assert.False(t, ok)
 	})
 }
